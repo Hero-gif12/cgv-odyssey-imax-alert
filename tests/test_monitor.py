@@ -101,6 +101,37 @@ class MonitorTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
+    def test_discord_failure_keeps_new_session_pending(self):
+        path = Path(__file__).resolve().parents[1] / "test-discord-state.json"
+        date = "2026-09-21"
+        current_rows = []
+        sent = []
+
+        def fetch(requested_date):
+            return monitor.parse_schedule(
+                {"statusCode": 0, "data": current_rows if requested_date == date else []}, requested_date
+            )
+
+        def send(message=None, embed=None):
+            sent.append(embed)
+            if len(sent) == 1:
+                raise monitor.MonitorError("Discord 전송 실패: HTTP 503")
+
+        try:
+            with patch.object(monitor, "STATE_PATH", path), patch.object(monitor, "fetch", fetch), \
+                    patch.object(monitor, "send_discord", send), \
+                    patch.object(monitor, "now", lambda: monitor.datetime(2026, 9, 17, 12, tzinfo=monitor.KST)):
+                self.assertEqual(monitor.run(), 0)
+                current_rows.append(row("20260921", "오디세이", "IMAX관", "1310"))
+                self.assertEqual(monitor.run(), 0)
+                self.assertEqual(monitor.load_state()["seen"][date], [])
+                self.assertEqual(monitor.run(), 0)
+                self.assertEqual(len(monitor.load_state()["seen"][date]), 1)
+                self.assertEqual(monitor.run(), 0)
+                self.assertEqual(len(sent), 2)
+        finally:
+            path.unlink(missing_ok=True)
+
     def test_repeated_errors_and_recovery_notify_once(self):
         path = Path(__file__).resolve().parents[1] / "test-error-state.json"
         current = monitor.datetime(2026, 9, 17, 12, tzinfo=monitor.KST)
