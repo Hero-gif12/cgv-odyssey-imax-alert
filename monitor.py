@@ -36,6 +36,21 @@ def iso(instant):
     return instant.isoformat(timespec="seconds")
 
 
+def log(message, *, error=False):
+    print(f"[{now():%H:%M:%S} KST] {message}", file=sys.stderr if error else sys.stdout, flush=True)
+
+
+def notify(message=None, embed=None):
+    """A Discord outage must not stop later CGV checks or consume an unsent alert."""
+    try:
+        send_discord(message, embed)
+    except MonitorError as error:
+        log(str(error), error=True)
+        return False
+    log("Discord 알림 전송 성공")
+    return True
+
+
 def load_state():
     try:
         state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -236,7 +251,7 @@ def run(once=False, notify_existing=False):
             diagnose(result)
             results.append(result)
     except MonitorError as error:
-        print("CGV 조회 실패: " + str(error), file=sys.stderr)
+        log("CGV 조회 실패: " + str(error), error=True)
         if once:
             return 1
         state["failures"] = int(state.get("failures", 0)) + 1
@@ -248,26 +263,25 @@ def run(once=False, notify_existing=False):
         if state["failures"] >= 3:
             last = state.get("error_notified_at")
             if not last or current - datetime.fromisoformat(last) >= timedelta(hours=6):
-                send_discord("**CGV 감시 오류**\nCGV 상영정보 조회를 연속으로 실패했습니다.\n"
-                             f"상태: {error}\n감시: 오디세이 / 용산아이파크몰 / IMAX\n"
-                             f"조치: 요청 간격을 {delay}분으로 늘렸습니다.")
-                state["error_notified_at"] = iso(current)
-                save_state(state)
+                if notify("**CGV 감시 오류**\nCGV 상영정보 조회를 연속으로 실패했습니다.\n"
+                          f"상태: {error}\n감시: 오디세이 / 용산아이파크몰 / IMAX\n"
+                          f"조치: 요청 간격을 {delay}분으로 늘렸습니다."):
+                    state["error_notified_at"] = iso(current)
+                    save_state(state)
         return 1
 
     if once:
         print("CGV 회차 데이터 조회 성공. 단발 조회는 상태를 변경하지 않습니다.")
         return 0
 
-    if state.get("unhealthy"):
-        send_discord("CGV 감시가 정상 상태로 복구되었습니다.")
+    if state.get("unhealthy") and notify("CGV 감시가 정상 상태로 복구되었습니다."):
         state["unhealthy"] = False
         save_state(state)
     if not state.get("initialized"):
         if notify_existing:
             for result in results:
                 if result["sessions"]:
-                    send_discord("현재 오디세이 IMAX 회차가 이미 존재함", session_embed(result["date"], result["sessions"]))
+                    notify("현재 오디세이 IMAX 회차가 이미 존재함", session_embed(result["date"], result["sessions"]))
         print("최초 기준값 저장")
     else:
         for result in results:
@@ -275,15 +289,16 @@ def run(once=False, notify_existing=False):
             seen = set(state["seen"].get(date, []))
             new = [s for s in result["sessions"] if s["key"] not in seen]
             if new:
-                send_discord(embed=session_embed(date, new))
-                state["seen"][date] = sorted(seen | {s["key"] for s in new})
-                save_state(state)
-                print(f"신규 회차 알림: {date}, {len(new)}개")
-    for result in results:
-        date = result["date"]
-        state["seen"][date] = sorted(set(state["seen"].get(date, [])) |
-                                     {s["key"] for s in result["sessions"]})
-    state.update(initialized=True, failures=0, next_retry=None, unhealthy=False, error_notified_at=None)
+                log(f"신규 IMAX 회차 발견: {date} " + ", ".join(sorted({s["time"] for s in new})))
+                if notify(embed=session_embed(date, new)):
+                    state["seen"][date] = sorted(seen | {s["key"] for s in new})
+                    save_state(state)
+    if not state.get("initialized"):
+        for result in results:
+            state["seen"][result["date"]] = sorted({s["key"] for s in result["sessions"]})
+    if not any(result["sessions"] for result in results):
+        log("오디세이 IMAX 회차 없음")
+    state.update(initialized=True, failures=0, next_retry=None, error_notified_at=None)
     save_state(state)
     return 0
 
