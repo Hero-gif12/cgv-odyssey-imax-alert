@@ -2,17 +2,19 @@ name: CGV Odyssey IMAX monitor
 
 on:
   schedule:
+    # UTC. 2026-09-17 through 2026-09-23 only (monitor.py checks the year).
     - cron: '2/5 * 17-23 9 *'
   workflow_dispatch:
     inputs:
       mode:
-        description: 'once: CGV 조회 / test-discord: 알림 테스트 / run: 상태 저장'
+        description: 'once: CGV 조회 / test-alert: 실제 회차 알림 테스트 / test-discord: 연결 테스트 / run: 감시'
         required: true
         default: once
         type: choice
         options:
           - once
           - test-discord
+          - test-alert
           - run
       notify_existing:
         description: '최초 run에서 기존 회차 한 번 알림'
@@ -28,6 +30,7 @@ concurrency:
 
 jobs:
   monitor:
+    # Manual checks work before activation. Enable the schedule only after a real CGV response.
     if: github.event_name == 'workflow_dispatch' || vars.CGV_MONITOR_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -43,6 +46,7 @@ jobs:
           case "$MODE" in
             once) option=--once ;;
             test-discord) option=--test-discord ;;
+            test-alert) option=--test-alert ;;
             run|'') option=--run ;;
             *) echo 'Invalid mode'; exit 2 ;;
           esac
