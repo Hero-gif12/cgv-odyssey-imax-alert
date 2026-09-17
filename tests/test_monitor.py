@@ -83,23 +83,24 @@ class MonitorTests(unittest.TestCase):
         finally:
             path.unlink(missing_ok=True)
 
-    def test_backoff_prevents_immediate_retry(self):
+    def test_access_and_parse_errors_stop_lookup_and_back_off(self):
         path = Path(__file__).resolve().parents[1] / "test-backoff-state.json"
-        try:
-            calls = []
+        for message in ("HTTP 403", "HTTP 429", "CAPTCHA 또는 Challenge 의심", "응답 파싱 실패"):
+            try:
+                calls = []
 
-            def fail(date):
-                calls.append(date)
-                raise monitor.MonitorError("HTTP 403")
+                def fail(date):
+                    calls.append(date)
+                    raise monitor.MonitorError(message)
 
-            with patch.object(monitor, "STATE_PATH", path), patch.object(monitor, "fetch", fail), \
-                    patch.object(monitor, "now", lambda: monitor.datetime(2026, 9, 17, 12, tzinfo=monitor.KST)):
-                self.assertEqual(monitor.run(), 1)
-                self.assertEqual(monitor.run(), 0)
-                self.assertEqual(len(calls), 1)
-                self.assertEqual(monitor.load_state()["next_retry"], "2026-09-17T12:05:00+09:00")
-        finally:
-            path.unlink(missing_ok=True)
+                with patch.object(monitor, "STATE_PATH", path), patch.object(monitor, "fetch", fail), \
+                        patch.object(monitor, "now", lambda: monitor.datetime(2026, 9, 17, 12, tzinfo=monitor.KST)):
+                    self.assertEqual(monitor.run(), 1)
+                    self.assertEqual(monitor.run(), 0)
+                    self.assertEqual(calls, ["2026-09-21"])
+                    self.assertEqual(monitor.load_state()["next_retry"], "2026-09-17T12:05:00+09:00")
+            finally:
+                path.unlink(missing_ok=True)
 
     def test_discord_failure_keeps_new_session_pending(self):
         path = Path(__file__).resolve().parents[1] / "test-discord-state.json"
