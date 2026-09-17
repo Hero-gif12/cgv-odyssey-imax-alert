@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CGV Yongsan IMAX schedule watcher. No login, cookies, or browser automation."""
+"""CGV IMAX schedule watcher. No login, cookies, or browser automation."""
 
 import argparse
 import json
@@ -14,9 +14,14 @@ from pathlib import Path
 
 
 KST = timezone(timedelta(hours=9))
-DATES = ("2026-09-21", "2026-09-23")
-SITE_NO = "0013"
-THEATER = "CGV 용산아이파크몰"
+TARGETS = (
+    {"date": "2026-09-23", "site_no": "0013", "theater": "CGV 용산아이파크몰",
+     "movie": "오디세이", "titles": {"오디세이", "theodyssey", "odyssey"},
+     "state_key": "2026-09-23"},
+    {"date": "2026-09-23", "site_no": "0074", "theater": "CGV 왕십리",
+     "movie": "어벤져스: 엔드게임", "titles": {"어벤져스엔드게임", "avengersendgame"},
+     "state_key": "0074|avengers-endgame|2026-09-23"},
+)
 API = "https://cgv.co.kr/api/v1/booking/searchMovScnInfo"
 BOOKING_PAGE = "https://cgv.co.kr/cnm/movieBook/cinema"
 USER_AGENT = "CGVScheduleMonitor/1.0 (+https://github.com/Hero-gif12/cgv-odyssey-imax-alert)"
@@ -75,8 +80,8 @@ def normalize_title(value):
     return re.sub(r"[^\w가-힣]", "", value)
 
 
-def movie_matches(value):
-    return normalize_title(value) in {"오디세이", "theodyssey", "odyssey"}
+def movie_matches(value, target):
+    return normalize_title(value) in target["titles"]
 
 
 def is_imax(row):
@@ -84,7 +89,8 @@ def is_imax(row):
     return "IMAX" in str(row.get("scnsNm", "")).upper() or "아이맥스" in str(row.get("scnsNm", ""))
 
 
-def parse_schedule(payload, requested_date):
+def parse_schedule(payload, target):
+    requested_date = target["date"]
     if not isinstance(payload, dict) or payload.get("statusCode") != 0:
         raise MonitorError("CGV API 오류 또는 데이터 구조 변경")
     rows = payload.get("data")
@@ -105,13 +111,13 @@ def parse_schedule(payload, requested_date):
         if date != requested_date.replace("-", ""):
             raise MonitorError("CGV 응답 날짜가 요청 날짜와 다릅니다")
         # The official endpoint also includes the neighbouring CINE de CHEF.
-        if row["siteNo"] != SITE_NO:
+        if row["siteNo"] != target["site_no"]:
             continue
         target_rows += 1
         movies.add(movie)
-        if movie_matches(movie):
+        if movie_matches(movie, target):
             screens.add(screen)
-        if not movie_matches(movie) or not is_imax(row):
+        if not movie_matches(movie, target) or not is_imax(row):
             continue
         if not re.fullmatch(r"\d{4}", time) or int(time[-2:]) > 59 or int(time[:2]) > 29:
             raise MonitorError("CGV 데이터 구조 변경: 상영시간을 읽을 수 없습니다")
@@ -129,13 +135,13 @@ def parse_schedule(payload, requested_date):
                         str(row.get("scnSseq") or ""), str(row.get("prodNo") or ""), time))
         matched.append({"key": key, "time": time[:2] + ":" + time[2:],
                         "screen": screen, "movie": movie})
-    return {"date": requested_date, "rows": target_rows, "related_rows": len(rows) - target_rows, "movies": sorted(movies),
+    return {"target": target, "date": requested_date, "rows": target_rows, "related_rows": len(rows) - target_rows, "movies": sorted(movies),
             "screens": sorted(screens), "sessions": matched}
 
 
-def fetch(date):
-    params = urllib.parse.urlencode({"coCd": "A420", "siteNo": SITE_NO,
-                                     "scnYmd": date.replace("-", ""), "rtctlScopCd": "08"})
+def fetch(target):
+    params = urllib.parse.urlencode({"coCd": "A420", "siteNo": target["site_no"],
+                                     "scnYmd": target["date"].replace("-", ""), "rtctlScopCd": "08"})
     request = urllib.request.Request(API + "?" + params,
                                      headers={"Accept": "application/json", "Referer": BOOKING_PAGE,
                                               "User-Agent": USER_AGENT})
@@ -161,7 +167,7 @@ def fetch(date):
     if "json" not in content_type.lower():
         raise MonitorError("응답 파싱 실패: JSON이 아닙니다")
     try:
-        return parse_schedule(json.loads(sample), date)
+        return parse_schedule(json.loads(sample), target)
     except ValueError:
         raise MonitorError("응답 파싱 실패: JSON 형식 오류") from None
 
@@ -198,36 +204,38 @@ def send_discord(message=None, embed=None):
         raise MonitorError("Discord 전송 실패: 네트워크 오류") from None
 
 
-def session_embed(date, sessions):
+def session_embed(target, sessions):
     return {"title": "CGV 예매 오픈 감지", "color": 0xE74C3C,
-            "fields": [{"name": "영화", "value": "오디세이", "inline": True},
-                       {"name": "극장", "value": THEATER, "inline": True},
+            "fields": [{"name": "영화", "value": target["movie"], "inline": True},
+                       {"name": "극장", "value": target["theater"], "inline": True},
                        {"name": "상영관", "value": "IMAX", "inline": True},
-                       {"name": "날짜", "value": date, "inline": True},
+                       {"name": "날짜", "value": target["date"], "inline": True},
                        {"name": "새로 발견된 회차", "value": "\n".join(sorted({s["time"] for s in sessions}))}],
             "description": "CGV에서 직접 예매 가능 여부를 확인하세요.",
             "footer": {"text": "감지 시간(KST): " + now().strftime("%Y-%m-%d %H:%M:%S")}}
 
 
 def diagnose(result):
-    print(f"{result['date']} | 극장: {THEATER} (siteNo={SITE_NO}) | 회차 {result['rows']}개")
+    target = result["target"]
+    print(f"{result['date']} | 극장: {target['theater']} (siteNo={target['site_no']}) | 회차 {result['rows']}개")
     print("  조회된 영화: " + (", ".join(result["movies"]) or "없음"))
-    print("  오디세이 상영관: " + (", ".join(result["screens"]) or "없음"))
+    print(f"  {target['movie']} 상영관: " + (", ".join(result["screens"]) or "없음"))
     if result.get("related_rows"):
         print(f"  다른 극장 회차 {result['related_rows']}개 제외")
-    print("  예매 가능한 오디세이 IMAX: " +
+    print(f"  예매 가능한 {target['movie']} IMAX: " +
           (", ".join(sorted({s["time"] for s in result["sessions"]})) or "없음"))
 
 
 def test_alert():
     """Exercise the real CGV lookup and Discord embed without touching saved state."""
     date = now().date().isoformat()
-    result = fetch(date)
+    target = {**TARGETS[0], "date": date}
+    result = fetch(target)
     diagnose(result)
     if not result["sessions"]:
         raise MonitorError("오늘 실제 오디세이 IMAX 회차가 없어 예매 알림 테스트를 보낼 수 없습니다")
     sample = sorted(result["sessions"], key=lambda session: session["time"])[0]
-    embed = session_embed(date, [sample])
+    embed = session_embed(target, [sample])
     embed["title"] = "[테스트] CGV 예매 알림 형식 확인"
     embed["description"] = "실제 CGV 회차로 만든 연결 테스트입니다. 새 회차 등록 알림은 아닙니다."
     send_discord(embed=embed)
@@ -237,7 +245,7 @@ def test_alert():
 def run(once=False, notify_existing=False):
     state = load_state()
     current = now()
-    if not once and current.date().isoformat() > max(DATES):
+    if not once and current.date().isoformat() > max(target["date"] for target in TARGETS):
         print("감시 대상 날짜가 지났습니다. 조회를 종료합니다.")
         return 0
     if not once and state.get("next_retry") and current < datetime.fromisoformat(state["next_retry"]):
@@ -246,12 +254,12 @@ def run(once=False, notify_existing=False):
 
     results = []
     try:
-        for date in DATES:
-            result = fetch(date)
+        for target in TARGETS:
+            result = fetch(target)
             diagnose(result)
             results.append(result)
     except MonitorError as error:
-        log("CGV 조회 실패: " + str(error), error=True)
+        log(f"CGV 조회 실패 ({target['movie']} / {target['theater']} / {target['date']}): {error}", error=True)
         if once:
             return 1
         state["failures"] = int(state.get("failures", 0)) + 1
@@ -264,7 +272,7 @@ def run(once=False, notify_existing=False):
             last = state.get("error_notified_at")
             if not last or current - datetime.fromisoformat(last) >= timedelta(hours=6):
                 if notify("**CGV 감시 오류**\nCGV 상영정보 조회를 연속으로 실패했습니다.\n"
-                          f"상태: {error}\n감시: 오디세이 / 용산아이파크몰 / IMAX\n"
+                          f"상태: {error}\n감시: {target['movie']} / {target['theater']} / IMAX / {target['date']}\n"
                           f"조치: 요청 간격을 {delay}분으로 늘렸습니다."):
                     state["error_notified_at"] = iso(current)
                     save_state(state)
@@ -281,23 +289,28 @@ def run(once=False, notify_existing=False):
         if notify_existing:
             for result in results:
                 if result["sessions"]:
-                    notify("현재 오디세이 IMAX 회차가 이미 존재함", session_embed(result["date"], result["sessions"]))
+                    target = result["target"]
+                    notify(f"현재 {target['movie']} IMAX 회차가 이미 존재함", session_embed(target, result["sessions"]))
         print("최초 기준값 저장")
     else:
         for result in results:
-            date = result["date"]
-            seen = set(state["seen"].get(date, []))
+            target = result["target"]
+            state_key = target["state_key"]
+            seen = set(state["seen"].setdefault(state_key, []))
             new = [s for s in result["sessions"] if s["key"] not in seen]
             if new:
-                log(f"신규 IMAX 회차 발견: {date} " + ", ".join(sorted({s["time"] for s in new})))
-                if notify(embed=session_embed(date, new)):
-                    state["seen"][date] = sorted(seen | {s["key"] for s in new})
+                log(f"신규 IMAX 회차 발견: {target['movie']} / {target['theater']} / {target['date']} " +
+                    ", ".join(sorted({s["time"] for s in new})))
+                if notify(embed=session_embed(target, new)):
+                    state["seen"][state_key] = sorted(seen | {s["key"] for s in new})
                     save_state(state)
     if not state.get("initialized"):
         for result in results:
-            state["seen"][result["date"]] = sorted({s["key"] for s in result["sessions"]})
-    if not any(result["sessions"] for result in results):
-        log("오디세이 IMAX 회차 없음")
+            state["seen"][result["target"]["state_key"]] = sorted({s["key"] for s in result["sessions"]})
+    for result in results:
+        if not result["sessions"]:
+            target = result["target"]
+            log(f"{target['movie']} / {target['theater']} / {target['date']} IMAX 회차 없음")
     state.update(initialized=True, failures=0, next_retry=None, error_notified_at=None)
     save_state(state)
     return 0

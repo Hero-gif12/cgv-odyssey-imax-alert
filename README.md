@@ -1,49 +1,30 @@
-# CGV 용산아이파크몰 오디세이 IMAX 감시
+# CGV IMAX 상영 회차 알림
 
 **개인용 상영 스케줄 알림 도구이며 자동 예매 기능 없음**
 
-GitHub Actions에서 2026-09-21, 2026-09-23의 예매 가능한 IMAX 회차를 확인하고, 새 회차가 생기면 Discord Webhook으로 알립니다. 자동 예매·로그인·쿠키·브라우저 자동화는 사용하지 않습니다. Python 표준 라이브러리만 사용합니다.
+GitHub Actions에서 다음 두 대상을 감시하고, 새로 예매 가능한 IMAX 회차가 발견되면 Discord Webhook으로 알립니다.
 
-2026-09-17: [기준 상태 저장 실행](https://github.com/Hero-gif12/cgv-odyssey-imax-alert/actions/runs/35177353460)이 성공했고, `CGV_MONITOR_ENABLED=true`로 예약 감시를 활성화했습니다. 실행 상태와 로그는 [Actions](https://github.com/Hero-gif12/cgv-odyssey-imax-alert/actions/workflows/cgv-monitor.yml)에서 확인할 수 있습니다.
+| 영화 | 극장 | 날짜 |
+| --- | --- | --- |
+| 오디세이 | CGV 용산아이파크몰 | 2026-09-23 |
+| 어벤져스: 엔드게임 | CGV 왕십리 | 2026-09-23 |
 
-## 먼저 확인할 점
+용산 오디세이 **2026-09-21 감시는 종료**했습니다. 기존 `state.json`의 9월 21일 기록은 과거 알림 이력으로 남아 있지만 조회 대상이 아닙니다. 계정 로그인·쿠키·브라우저 자동화·자동 예매·좌석 선택은 사용하지 않습니다. Python 표준 라이브러리만 사용합니다.
 
-- 2026-09-17 재검증에서 프로그램 식별용 `User-Agent: CGVScheduleMonitor/1.0`를 명시한 일반 HTTP 요청으로 **로컬과 GitHub Actions 모두 실제 회차 조회에 성공했습니다.** 브라우저 위장·쿠키·프록시는 사용하지 않습니다. 서버 측 403 발생 원인 자체를 확정한 것은 아닙니다.
-- [GitHub Actions 실제 조회 성공 기록](https://github.com/Hero-gif12/cgv-odyssey-imax-alert/actions/runs/35177285509): 9월 21일 용산아이파크몰 6개 회차, 9월 23일 10개 회차. 검증 시점에 두 날짜의 오디세이 IMAX 회차는 없었습니다. 함께 반환된 씨네드쉐프 용산(`P013`) 회차는 제외합니다.
-- Discord 테스트 전송 성공 및 사용자의 채널 수신 확인을 완료했습니다. 오늘(9월 17일)의 실제 회차로 오디세이의 일반관·4DX·IMAX 구분도 확인했습니다. 이 날짜는 진단에만 사용하며 감시 대상에 추가하지 않았습니다.
-- Actions cron은 5분 간격으로 설정돼 있고, 시작된 각 실행에서 약 60초 간격으로 최대 5회 조회합니다. GitHub의 예약 실행은 지연되거나 누락될 수 있어 하루 내내 60초 간격이 보장되지는 않습니다.
-- 비용을 없애려면 표준 GitHub 호스팅 러너를 쓰는 **공개 저장소**가 적합합니다. 비공개 저장소는 계정의 무료 사용 시간을 소모하므로 이 빈도로 장기 실행하지 마세요.
-- `state.json`은 회차 키와 오류 대기 시각을 저장소에 커밋합니다. Webhook URL은 절대 넣지 않습니다.
+## 현재 동작
 
-## 설정
+- [Actions](https://github.com/Hero-gif12/cgv-odyssey-imax-alert/actions/workflows/cgv-monitor.yml)의 cron은 5분 간격으로 시작을 요청합니다. 시작된 각 실행에서 즉시 한 번, 이후 약 60초 간격으로 최대 5회 조회합니다. 예약 실행 자체는 지연되거나 누락될 수 있어 하루 내내 60초 간격을 보장하지는 않습니다.
+- 각 대상은 CGV 극장 코드, 지정 날짜, 영화 제목, 실제 상영관명 `IMAX` 또는 `아이맥스`, 잔여 좌석 1석 이상, 예매 제어 상태 `N`을 확인합니다. 영화 제목은 구분자를 제거한 뒤 정확하게 비교합니다. CGV에서 직접 예매 가능 여부를 최종 확인하세요.
+- 2026-09-17 단발 실조회에서 용산아이파크몰(`0013`) 9월 23일 10개 회차, 왕십리(`0074`) 9월 23일 16개 회차를 읽었습니다. 두 대상 영화의 IMAX 회차는 아직 없었습니다. 새 회차가 발견되면 다음 조회를 기다리지 않고 Discord로 전송합니다.
+- `state.json`은 대상별로 전송 완료 회차와 오류 대기 시각을 저장소에 커밋합니다. 새 왕십리 대상에는 별도 상태 키를 사용하며, 기존 오디세이 9월 23일 중복 방지 기록을 이어받습니다. Discord 전송에 실패한 회차는 전송 완료로 표시하지 않습니다.
+- 403·429·CAPTCHA·Challenge·응답 파싱 오류가 나면 현재 workflow의 추가 CGV 조회를 중단합니다. 첫 실패부터 5 → 15 → 30 → 60 → 120분 대기합니다. 세 번 연속 실패하면 Discord 오류 알림을 보내고, 반복 오류 알림은 6시간 동안 억제합니다. 정상 회복 시 한 번 알립니다. 영화·IMAX 회차가 없는 정상 응답은 오류가 아닙니다.
+- 같은 concurrency 그룹의 workflow는 동시에 실행되지 않습니다. 실행 시간이 길어지면 다음 조회를 생략하며, 한 작업의 제한 시간은 5분입니다.
 
-1. 이 폴더의 `monitor.py`, `.gitignore`, `.github/workflows/cgv-monitor.yml`을 저장소 기본 브랜치에 올립니다.
-2. 저장소 **Settings → Secrets and variables → Actions → Secrets**에서 `DISCORD_WEBHOOK_URL`을 등록합니다. 실제 URL을 코드, Issue, 로그, 채팅에 붙이지 마세요.
-3. **Actions → CGV Odyssey IMAX monitor → Run workflow**에서 `test-discord`를 실행하고 채널에서 테스트 메시지 수신을 확인합니다.
-   실제 CGV 조회부터 Discord Embed까지 확인하려면 `test-alert`를 선택합니다. 오늘 조회된 오디세이 IMAX 회차 중 하나를 **[테스트]**로 표시해 보냅니다. 상태 파일은 변경하지 않습니다.
-4. 같은 메뉴에서 `once`를 실행합니다. 두 날짜의 `회차 데이터 조회 성공`과 영화·상영관·시간 진단을 확인합니다. HTTP 403·429·Challenge·파싱 오류라면 여기서 멈춥니다.
-5. 실제 CGV 회차 데이터가 읽힌 경우에만 `run`을 한 번 실행해 기준 상태를 저장합니다. 최초 기존 회차 알림이 필요하면 `notify_existing`을 선택합니다. `state.json`이 커밋됐는지 확인합니다.
-6. 실제 CGV 조회가 성공하는 정상 경로가 확인된 경우에만 **Settings → Secrets and variables → Actions → Variables**에 `CGV_MONITOR_ENABLED` 값을 `true`로 등록해 예약 감시를 켭니다. 중지하려면 `false`로 바꾸거나 **Actions → CGV Odyssey IMAX monitor → … → Disable workflow**를 선택합니다.
+## 설정과 확인
 
-## 동작
+1. 저장소 **Settings → Secrets and variables → Actions → Secrets**에 `DISCORD_WEBHOOK_URL`을 등록합니다. URL을 코드·Issue·로그에 넣지 마세요. `.env`는 `.gitignore`에 등록돼 있습니다.
+2. **Actions → CGV IMAX monitor → Run workflow**에서 `once`를 실행해 두 극장·날짜의 실제 응답을 확인합니다. `test-discord`는 연결 테스트 메시지를 보냅니다. `test-alert`는 기존 진단 기능으로 오늘의 실제 오디세이 IMAX 회차가 있을 때만 `[테스트]` 메시지를 보냅니다.
+3. 예약 감시는 Actions 변수 `CGV_MONITOR_ENABLED=true`일 때 활성화됩니다. 중지하려면 `false`로 변경하거나 워크플로를 비활성화합니다.
 
-- 예약: 2026년 9월 17~23일에 5분 간격으로 시작을 요청합니다. 각 실행은 시작 직후, 이후 약 60초 간격으로 최대 5회 조회하고 보통 약 4분대에 끝납니다. 실행 시간이 길어지면 260초 제한에 맞춰 다음 조회를 생략합니다. 같은 그룹의 workflow는 동시 실행하지 않습니다.
-- 상태: 각 조회가 끝날 때 변경된 `state.json`을 커밋·푸시해 다음 Actions 실행에 전달합니다. 신규 회차를 찾으면 다음 조회를 기다리지 않고 즉시 Discord로 알립니다. Discord 전송 실패 시 회차를 전송 완료로 표시하지 않아 다음 조회에서 다시 시도합니다.
-- 새 회차 판정: 극장 코드 `0013`, 영화명 `오디세이`/`The Odyssey`/`Odyssey`, 실제 상영관명 `IMAX`/`아이맥스`, 지정 날짜, 잔여 좌석 1석 이상, 예매 제어 상태 `N`. CGV에서 직접 예매 가능 여부를 최종 확인하세요.
-- 첫 실행: 기존 회차를 `state.json`에만 기록합니다. 이후 같은 회차는 재알림하지 않습니다.
-- 오류: 403·429·Challenge·응답 파싱 실패 등 조회 오류가 나면 현재 workflow의 반복을 즉시 중단합니다. 첫 실패부터 5 → 15 → 30 → 60 → 120분 대기하며 다음 예약 실행에서 대기 시각을 확인합니다. 세 번 연속 실패 후 Discord 오류 알림, 동일 오류 알림은 6시간 동안 억제합니다. 정상 회복 시 한 번 알립니다. 영화나 IMAX 회차가 없는 정상 응답은 오류로 처리하지 않습니다.
-- CGV 응답 형식이 바뀌면 성공으로 처리하지 않습니다. Webhook 전송 오류에 URL을 출력하지 않습니다.
-
-## 로컬 명령
-
-```bash
-python3 monitor.py --once
-DISCORD_WEBHOOK_URL='...' python3 monitor.py --test-discord
-DISCORD_WEBHOOK_URL='...' python3 monitor.py --run
-```
-
-로컬에서도 `.env`는 자동 로드하지 않습니다. 환경변수로 전달하거나 셸에서 직접 로드하세요. `.env`는 `.gitignore`에 등록되어 있습니다.
-
-## 테스트
-
-`python3 -m unittest discover -s tests -v`로 극장·영화·상영관·날짜 필터, 예매 제어 상태, 신규 회차 알림과 중복 방지, Discord 전송 실패 시 재시도, 오류 대기와 복구 알림을 확인합니다. 이 테스트는 외부 CGV 요청이나 Discord 전송 없이 실행됩니다.
+로컬 단발 확인: `python3 monitor.py --once`  
+로컬 테스트: `python3 -m unittest discover -s tests -v`
