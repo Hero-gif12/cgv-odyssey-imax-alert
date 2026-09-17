@@ -33,7 +33,7 @@ jobs:
     # Manual checks work before activation. Enable the schedule only after a real CGV response.
     if: github.event_name == 'workflow_dispatch' || vars.CGV_MONITOR_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 3
+    timeout-minutes: 5
     env:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
       MODE: ${{ inputs.mode }}
@@ -54,11 +54,15 @@ jobs:
           if [[ "$option" == '--run' && "$NOTIFY_EXISTING" == 'true' ]]; then
             extra+=(--notify-existing)
           fi
-          set +e
-          python3 monitor.py "$option" "${extra[@]}"
-          result=$?
-          set -e
-          if [[ "$option" == '--run' && -f state.json ]]; then
+          if [[ "$option" != '--run' ]]; then
+            python3 monitor.py "$option"
+            exit $?
+          fi
+
+          persist_state() {
+            if [[ ! -f state.json ]]; then
+              return
+            fi
             git add state.json
             if ! git diff --cached --quiet; then
               git config user.name 'github-actions[bot]'
@@ -66,5 +70,31 @@ jobs:
               git commit -m 'Update CGV monitor state'
               git push
             fi
-          fi
-          exit "$result"
+          }
+
+          started=$(date +%s)
+          for attempt in 1 2 3 4 5; do
+            printf '[%s KST] CGV 조회 시작 (%s/5)\n' "$(TZ=Asia/Seoul date +%H:%M:%S)" "$attempt"
+            set +e
+            python3 monitor.py --run "${extra[@]}"
+            result=$?
+            set -e
+            persist_state
+            if [[ "$result" -ne 0 ]]; then
+              echo 'CGV 조회 실패: 이번 workflow의 추가 요청을 중단합니다.'
+              exit "$result"
+            fi
+            if python3 -c 'import json,sys; sys.exit(0 if json.load(open("state.json", encoding="utf-8")).get("next_retry") else 1)'; then
+              echo 'CGV 조회 대기 중: 이번 workflow의 추가 요청을 중단합니다.'
+              exit 0
+            fi
+            if [[ "$attempt" -eq 5 ]]; then
+              break
+            fi
+            elapsed=$(( $(date +%s) - started ))
+            if (( elapsed + 60 >= 260 )); then
+              echo '다음 예약 실행과 겹치지 않도록 반복 조회를 마칩니다.'
+              break
+            fi
+            sleep 60
+          done
