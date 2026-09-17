@@ -156,8 +156,11 @@ def send_discord(message=None, embed=None):
     if embed:
         payload["embeds"] = [embed]
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(url, data=data, method="POST",
-                                     headers={"Content-Type": "application/json"})
+    request = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"Content-Type": "application/json",
+                 "User-Agent": "DiscordBot (https://github.com/Hero-gif12/cgv-odyssey-imax-alert, 1.0)"},
+    )
     try:
         with urllib.request.urlopen(request, timeout=15) as response:
             if response.status not in (200, 204):
