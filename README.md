@@ -4,7 +4,7 @@ GitHub Actions에서 2026-09-21, 2026-09-23의 예매 가능한 IMAX 회차를 �
 
 ## 먼저 확인할 점
 
-- CGV가 GitHub Actions의 일반 HTTP 요청을 허용하는지는 아직 검증되지 않았습니다. 로컬 Windows 환경에서는 CGV 공식 페이지와 API가 모두 Cloudflare HTML을 포함한 HTTP 403을 반환했습니다. **Actions에서 `once` 조회가 실제 회차 목록을 반환하기 전에는 예약 감시를 켜지 마세요.**
+- 2026-09-17 테스트에서 로컬 Windows 환경의 CGV 공식 페이지와 API는 Cloudflare HTML을 포함한 HTTP 403을 반환했고, GitHub Actions의 `once` 조회도 HTTP 403으로 실패했습니다. **현재 이 방식으로 실제 감시를 시작할 수 없습니다.** CGV 접근 제한을 우회하지 않습니다.
 - Actions 예약 실행의 최단 간격은 5분입니다. 실행이 늦거나 누락될 수 있어 즉시 알림을 보장하지 않습니다.
 - 비용을 없애려면 표준 GitHub 호스팅 러너를 쓰는 **공개 저장소**가 적합합니다. 비공개 저장소는 계정의 무료 사용 시간을 소모하므로 이 빈도로 장기 실행하지 마세요.
 - `state.json`은 회차 키와 오류 대기 시각을 저장소에 커밋합니다. Webhook URL은 절대 넣지 않습니다.
@@ -16,7 +16,7 @@ GitHub Actions에서 2026-09-21, 2026-09-23의 예매 가능한 IMAX 회차를 �
 3. **Actions → CGV Odyssey IMAX monitor → Run workflow**에서 `test-discord`를 실행하고 채널에서 테스트 메시지 수신을 확인합니다.
 4. 같은 메뉴에서 `once`를 실행합니다. 두 날짜의 `회차 데이터 조회 성공`과 영화·상영관·시간 진단을 확인합니다. HTTP 403·429·Challenge·파싱 오류라면 여기서 멈춥니다.
 5. 실제 CGV 회차 데이터가 읽힌 경우에만 `run`을 한 번 실행해 기준 상태를 저장합니다. 최초 기존 회차 알림이 필요하면 `notify_existing`을 선택합니다. `state.json`이 커밋됐는지 확인합니다.
-6. **Settings → Secrets and variables → Actions → Variables**에 `CGV_MONITOR_ENABLED` 값을 `true`로 등록해 예약 감시를 켭니다. 중지하려면 `false`로 바꿉니다.
+6. 실제 CGV 조회가 성공하는 정상 경로가 확인된 경우에만 **Settings → Secrets and variables → Actions → Variables**에 `CGV_MONITOR_ENABLED` 값을 `true`로 등록해 예약 감시를 켭니다. 중지하려면 `false`로 바꿉니다. 현재 워크플로는 비활성화되어 있으므로 재검증 때 수동으로 다시 활성화해야 합니다.
 
 ## 동작
 
