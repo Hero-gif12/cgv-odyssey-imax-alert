@@ -1,5 +1,7 @@
 # CGV 용산아이파크몰 오디세이 IMAX 감시
 
+**개인용 상영 스케줄 알림 도구이며 자동 예매 기능 없음**
+
 GitHub Actions에서 2026-09-21, 2026-09-23의 예매 가능한 IMAX 회차를 확인하고, 새 회차가 생기면 Discord Webhook으로 알립니다. 자동 예매·로그인·쿠키·브라우저 자동화는 사용하지 않습니다. Python 표준 라이브러리만 사용합니다.
 
 2026-09-17: [기준 상태 저장 실행](https://github.com/Hero-gif12/cgv-odyssey-imax-alert/actions/runs/35177353460)이 성공했고, `CGV_MONITOR_ENABLED=true`로 예약 감시를 활성화했습니다. 실행 상태와 로그는 [Actions](https://github.com/Hero-gif12/cgv-odyssey-imax-alert/actions/workflows/cgv-monitor.yml)에서 확인할 수 있습니다.
