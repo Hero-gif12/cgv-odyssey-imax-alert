@@ -12,6 +12,22 @@ def row(date, movie, screen, time, free=30):
 
 
 class MonitorTests(unittest.TestCase):
+    def test_alert_uses_real_lookup_and_test_label_without_state_change(self):
+        date = "2026-09-17"
+        result = monitor.parse_schedule(
+            {"statusCode": 0, "data": [row("20260917", "오디세이", "IMAX관", "1430")]}, date
+        )
+        with patch.object(monitor, "now", lambda: monitor.datetime(2026, 9, 17, 12, tzinfo=monitor.KST)), \
+                patch.object(monitor, "fetch", return_value=result) as fetch, \
+                patch.object(monitor, "send_discord") as send, \
+                patch.object(monitor, "save_state") as save:
+            monitor.test_alert()
+        fetch.assert_called_once_with(date)
+        send.assert_called_once()
+        self.assertIn("[테스트]", send.call_args.kwargs["embed"]["title"])
+        self.assertIn("14:30", send.call_args.kwargs["embed"]["fields"][4]["value"])
+        save.assert_not_called()
+
     def test_related_theater_and_controlled_session_are_excluded(self):
         related = row("20260921", "오디세이", "IMAX관", "1310")
         related["siteNo"] = "P013"
