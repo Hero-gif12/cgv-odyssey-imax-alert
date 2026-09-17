@@ -19,6 +19,7 @@ SITE_NO = "0013"
 THEATER = "CGV 용산아이파크몰"
 API = "https://cgv.co.kr/api/v1/booking/searchMovScnInfo"
 BOOKING_PAGE = "https://cgv.co.kr/cnm/movieBook/cinema"
+USER_AGENT = "CGVScheduleMonitor/1.0 (+https://github.com/Hero-gif12/cgv-odyssey-imax-alert)"
 STATE_PATH = Path(__file__).with_name("state.json")
 CHALLENGE_WORDS = ("captcha", "cloudflare", "challenge", "access denied")
 
@@ -76,6 +77,7 @@ def parse_schedule(payload, requested_date):
         raise MonitorError("CGV 데이터 구조 변경: 회차 목록이 없습니다")
 
     movies, screens, matched = set(), set(), []
+    target_rows = 0
     for row in rows:
         if not isinstance(row, dict):
             raise MonitorError("CGV 데이터 구조 변경: 회차 형식이 잘못되었습니다")
@@ -83,13 +85,19 @@ def parse_schedule(payload, requested_date):
         screen = str(row.get("scnsNm") or "").strip()
         date = str(row.get("scnYmd") or "")
         time = str(row.get("scnsrtTm") or "")
+        if not movie or not screen or not row.get("siteNo"):
+            raise MonitorError("CGV 데이터 구조 변경: 영화·상영관·극장 정보가 없습니다")
+        if date != requested_date.replace("-", ""):
+            raise MonitorError("CGV 응답 날짜가 요청 날짜와 다릅니다")
+        # The official endpoint also includes the neighbouring CINE de CHEF.
+        if row["siteNo"] != SITE_NO:
+            continue
+        target_rows += 1
         movies.add(movie)
         if movie_matches(movie):
             screens.add(screen)
         if not movie_matches(movie) or not is_imax(row):
             continue
-        if date != requested_date.replace("-", ""):
-            raise MonitorError("CGV 응답 날짜가 요청 날짜와 다릅니다")
         if not re.fullmatch(r"\d{4}", time) or int(time[-2:]) > 59 or int(time[:2]) > 29:
             raise MonitorError("CGV 데이터 구조 변경: 상영시간을 읽을 수 없습니다")
         try:
@@ -98,13 +106,15 @@ def parse_schedule(payload, requested_date):
             raise MonitorError("CGV 데이터 구조 변경: 잔여 좌석 수를 읽을 수 없습니다") from None
         if free < 0:
             raise MonitorError("CGV 데이터 구조 변경: 잔여 좌석 수가 잘못되었습니다")
-        if free == 0:
+        if row.get("cntlYn") not in ("Y", "N"):
+            raise MonitorError("CGV 데이터 구조 변경: 예매 제어 상태가 없습니다")
+        if free == 0 or row["cntlYn"] == "Y":
             continue
         key = "|".join((requested_date, str(row.get("scnsNo") or screen),
                         str(row.get("scnSseq") or ""), str(row.get("prodNo") or ""), time))
         matched.append({"key": key, "time": time[:2] + ":" + time[2:],
                         "screen": screen, "movie": movie})
-    return {"date": requested_date, "rows": len(rows), "movies": sorted(movies),
+    return {"date": requested_date, "rows": target_rows, "related_rows": len(rows) - target_rows, "movies": sorted(movies),
             "screens": sorted(screens), "sessions": matched}
 
 
@@ -112,7 +122,8 @@ def fetch(date):
     params = urllib.parse.urlencode({"coCd": "A420", "siteNo": SITE_NO,
                                      "scnYmd": date.replace("-", ""), "rtctlScopCd": "08"})
     request = urllib.request.Request(API + "?" + params,
-                                     headers={"Accept": "application/json", "Referer": BOOKING_PAGE})
+                                     headers={"Accept": "application/json", "Referer": BOOKING_PAGE,
+                                              "User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=20) as response:
             status = response.status
@@ -187,6 +198,8 @@ def diagnose(result):
     print(f"{result['date']} | 극장: {THEATER} (siteNo={SITE_NO}) | 회차 {result['rows']}개")
     print("  조회된 영화: " + (", ".join(result["movies"]) or "없음"))
     print("  오디세이 상영관: " + (", ".join(result["screens"]) or "없음"))
+    if result.get("related_rows"):
+        print(f"  다른 극장 회차 {result['related_rows']}개 제외")
     print("  예매 가능한 오디세이 IMAX: " +
           (", ".join(sorted({s["time"] for s in result["sessions"]})) or "없음"))
 
@@ -233,6 +246,8 @@ def run(once=False, notify_existing=False):
 
     if state.get("unhealthy"):
         send_discord("CGV 감시가 정상 상태로 복구되었습니다.")
+        state["unhealthy"] = False
+        save_state(state)
     if not state.get("initialized"):
         if notify_existing:
             for result in results:
@@ -246,6 +261,8 @@ def run(once=False, notify_existing=False):
             new = [s for s in result["sessions"] if s["key"] not in seen]
             if new:
                 send_discord(embed=session_embed(date, new))
+                state["seen"][date] = sorted(seen | {s["key"] for s in new})
+                save_state(state)
                 print(f"신규 회차 알림: {date}, {len(new)}개")
     for result in results:
         date = result["date"]
