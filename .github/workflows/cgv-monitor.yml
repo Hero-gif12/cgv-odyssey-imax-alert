@@ -1,4 +1,4 @@
-name: CGV Odyssey IMAX monitor
+name: CGV IMAX monitor
 
 on:
   schedule:
