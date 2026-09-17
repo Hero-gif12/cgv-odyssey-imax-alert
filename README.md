@@ -18,6 +18,7 @@ GitHub Actions에서 2026-09-21, 2026-09-23의 예매 가능한 IMAX 회차를 �
 1. 이 폴더의 `monitor.py`, `.gitignore`, `.github/workflows/cgv-monitor.yml`을 저장소 기본 브랜치에 올립니다.
 2. 저장소 **Settings → Secrets and variables → Actions → Secrets**에서 `DISCORD_WEBHOOK_URL`을 등록합니다. 실제 URL을 코드, Issue, 로그, 채팅에 붙이지 마세요.
 3. **Actions → CGV Odyssey IMAX monitor → Run workflow**에서 `test-discord`를 실행하고 채널에서 테스트 메시지 수신을 확인합니다.
+   실제 CGV 조회부터 Discord Embed까지 확인하려면 `test-alert`를 선택합니다. 오늘 조회된 오디세이 IMAX 회차 중 하나를 **[테스트]**로 표시해 보냅니다. 상태 파일은 변경하지 않습니다.
 4. 같은 메뉴에서 `once`를 실행합니다. 두 날짜의 `회차 데이터 조회 성공`과 영화·상영관·시간 진단을 확인합니다. HTTP 403·429·Challenge·파싱 오류라면 여기서 멈춥니다.
 5. 실제 CGV 회차 데이터가 읽힌 경우에만 `run`을 한 번 실행해 기준 상태를 저장합니다. 최초 기존 회차 알림이 필요하면 `notify_existing`을 선택합니다. `state.json`이 커밋됐는지 확인합니다.
 6. 실제 CGV 조회가 성공하는 정상 경로가 확인된 경우에만 **Settings → Secrets and variables → Actions → Variables**에 `CGV_MONITOR_ENABLED` 값을 `true`로 등록해 예약 감시를 켭니다. 중지하려면 `false`로 바꾸거나 **Actions → CGV Odyssey IMAX monitor → … → Disable workflow**를 선택합니다.

@@ -204,6 +204,21 @@ def diagnose(result):
           (", ".join(sorted({s["time"] for s in result["sessions"]})) or "없음"))
 
 
+def test_alert():
+    """Exercise the real CGV lookup and Discord embed without touching saved state."""
+    date = now().date().isoformat()
+    result = fetch(date)
+    diagnose(result)
+    if not result["sessions"]:
+        raise MonitorError("오늘 실제 오디세이 IMAX 회차가 없어 예매 알림 테스트를 보낼 수 없습니다")
+    sample = sorted(result["sessions"], key=lambda session: session["time"])[0]
+    embed = session_embed(date, [sample])
+    embed["title"] = "[테스트] CGV 예매 알림 형식 확인"
+    embed["description"] = "실제 CGV 회차로 만든 연결 테스트입니다. 새 회차 등록 알림은 아닙니다."
+    send_discord(embed=embed)
+    print(f"실제 CGV 회차로 Discord 테스트 알림 전송 성공: {date} {sample['time']}")
+
+
 def run(once=False, notify_existing=False):
     state = load_state()
     current = now()
@@ -279,12 +294,16 @@ def main():
     mode.add_argument("--once", action="store_true", help="실제 CGV 단발 조회, 알림·상태 변경 없음")
     mode.add_argument("--run", action="store_true", help="한 번 감시하고 상태 저장")
     mode.add_argument("--test-discord", action="store_true", help="Discord 테스트 메시지")
+    mode.add_argument("--test-alert", action="store_true", help="오늘 실제 CGV 회차로 예매 알림 형식 테스트")
     parser.add_argument("--notify-existing", action="store_true", help="최초 실행 시 기존 회차도 한 번 알림")
     args = parser.parse_args()
     try:
         if args.test_discord:
             send_discord("CGV 감시 프로그램 Discord 알림 테스트 성공")
             print("Discord 테스트 메시지 전송 성공. 채널 수신 여부를 확인하세요.")
+            return 0
+        if args.test_alert:
+            test_alert()
             return 0
         return run(once=args.once, notify_existing=args.notify_existing)
     except MonitorError as error:
