@@ -1,0 +1,22 @@
+name: Offline monitor tests
+on:
+  push:
+    paths:
+      - 'cloudflare/**'
+      - 'monitor.py'
+      - 'tests/**'
+      - '.github/workflows/test.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: node --test --test-isolation=none cloudflare/worker.test.mjs
+      - run: python3 -m unittest discover -s tests -v
