@@ -1,5 +1,5 @@
 {
-  "error_notified_at": null,
+  "error_notified_at": "2026-09-18T15:57:30+09:00",
   "failures": 2,
   "initialized": true,
   "next_retry": "2026-09-18T16:03:28+09:00",
