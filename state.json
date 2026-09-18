@@ -1,8 +1,8 @@
 {
   "error_notified_at": null,
-  "failures": 0,
+  "failures": 1,
   "initialized": true,
-  "next_retry": null,
+  "next_retry": "2026-09-18T15:35:53+09:00",
   "seen": {
     "0074|avengers-endgame|2026-09-23": [],
     "2026-09-21": [
@@ -15,6 +15,6 @@
     ],
     "2026-09-23": []
   },
-  "unhealthy": false,
+  "unhealthy": true,
   "version": 1
 }
