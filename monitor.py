@@ -56,6 +56,34 @@ def notify(message=None, embed=None):
     return True
 
 
+def notify_error(state):
+    """Report the first failure, including an unsent failure during backoff."""
+    current = now()
+    last = state.get("error_notified_at")
+    if last and current - datetime.fromisoformat(last) < timedelta(hours=6):
+        return
+    if notify("**CGV 감시 일시 중단**\n상영정보를 읽지 못해 예매 오픈을 놓칠 수 있습니다.\n"
+              f"상태: {state.get('last_error', '이전 실행의 CGV 조회 실패')}\n"
+              f"감시: {state.get('failed_target', '등록된 IMAX 감시 대상')}\n"
+              f"재확인 가능 시각: {state['next_retry']} (이후 GitHub 예약 실행 시 재시도)\n"
+              "CGV에서 직접 예매 가능 여부를 확인하세요."):
+        state["error_notified_at"] = iso(current)
+        save_state(state)
+
+
+def alert_new_sessions(state, result):
+    target = result["target"]
+    state_key = target["state_key"]
+    seen = set(state["seen"].setdefault(state_key, []))
+    new = [s for s in result["sessions"] if s["key"] not in seen]
+    if new:
+        log(f"신규 IMAX 회차 발견: {target['movie']} / {target['theater']} / {target['date']} " +
+            ", ".join(sorted({s["time"] for s in new})))
+        if notify(embed=session_embed(target, new)):
+            state["seen"][state_key] = sorted(seen | {s["key"] for s in new})
+            save_state(state)
+
+
 def load_state():
     try:
         state = json.loads(STATE_PATH.read_text(encoding="utf-8"))
@@ -157,9 +185,14 @@ def fetch(target):
     except (urllib.error.URLError, TimeoutError, OSError):
         raise MonitorError("네트워크 오류") from None
 
-    if status in (403, 429):
-        raise MonitorError(f"HTTP {status}")
     sample = body.decode("utf-8", errors="replace")
+    if status in (403, 429):
+        # Log only fixed categories, never response bodies, URLs, or headers.
+        kind = "JSON" if "json" in content_type.lower() else "HTML" if "html" in content_type.lower() else "기타"
+        markers = [word for word in CHALLENGE_WORDS if word in sample[:20_000].casefold()]
+        log(f"CGV HTTP 진단: 상태={status}, 응답유형={kind}, 읽은바이트={len(body)}, "
+            f"차단표식={','.join(markers) or '없음'}", error=True)
+        raise MonitorError(f"HTTP {status}")
     if any(word in sample[:20_000].casefold() for word in CHALLENGE_WORDS):
         raise MonitorError("CAPTCHA 또는 Challenge 의심")
     if status != 200:
@@ -250,6 +283,8 @@ def run(once=False, notify_existing=False):
         return 0
     if not once and state.get("next_retry") and current < datetime.fromisoformat(state["next_retry"]):
         print("CGV 조회 대기 중: " + state["next_retry"])
+        if state.get("unhealthy"):
+            notify_error(state)
         return 0
 
     results = []
@@ -258,6 +293,9 @@ def run(once=False, notify_existing=False):
             result = fetch(target)
             diagnose(result)
             results.append(result)
+            # Notify immediately; a later target's failure must not hide this result.
+            if not once and state.get("initialized"):
+                alert_new_sessions(state, result)
     except MonitorError as error:
         log(f"CGV 조회 실패 ({target['movie']} / {target['theater']} / {target['date']}): {error}", error=True)
         if once:
@@ -267,15 +305,10 @@ def run(once=False, notify_existing=False):
         delay = delays[min(state["failures"] - 1, len(delays) - 1)]
         state["next_retry"] = iso(current + timedelta(minutes=delay))
         state["unhealthy"] = True
+        state["last_error"] = str(error)
+        state["failed_target"] = f"{target['movie']} / {target['theater']} / IMAX / {target['date']}"
         save_state(state)
-        if state["failures"] >= 3:
-            last = state.get("error_notified_at")
-            if not last or current - datetime.fromisoformat(last) >= timedelta(hours=6):
-                if notify("**CGV 감시 오류**\nCGV 상영정보 조회를 연속으로 실패했습니다.\n"
-                          f"상태: {error}\n감시: {target['movie']} / {target['theater']} / IMAX / {target['date']}\n"
-                          f"조치: 요청 간격을 {delay}분으로 늘렸습니다."):
-                    state["error_notified_at"] = iso(current)
-                    save_state(state)
+        notify_error(state)
         return 1
 
     if once:
@@ -292,18 +325,6 @@ def run(once=False, notify_existing=False):
                     target = result["target"]
                     notify(f"현재 {target['movie']} IMAX 회차가 이미 존재함", session_embed(target, result["sessions"]))
         print("최초 기준값 저장")
-    else:
-        for result in results:
-            target = result["target"]
-            state_key = target["state_key"]
-            seen = set(state["seen"].setdefault(state_key, []))
-            new = [s for s in result["sessions"] if s["key"] not in seen]
-            if new:
-                log(f"신규 IMAX 회차 발견: {target['movie']} / {target['theater']} / {target['date']} " +
-                    ", ".join(sorted({s["time"] for s in new})))
-                if notify(embed=session_embed(target, new)):
-                    state["seen"][state_key] = sorted(seen | {s["key"] for s in new})
-                    save_state(state)
     if not state.get("initialized"):
         for result in results:
             state["seen"][result["target"]["state_key"]] = sorted({s["key"] for s in result["sessions"]})
@@ -312,6 +333,8 @@ def run(once=False, notify_existing=False):
             target = result["target"]
             log(f"{target['movie']} / {target['theater']} / {target['date']} IMAX 회차 없음")
     state.update(initialized=True, failures=0, next_retry=None, error_notified_at=None)
+    state.pop("last_error", None)
+    state.pop("failed_target", None)
     save_state(state)
     return 0
 
