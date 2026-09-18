@@ -19,7 +19,7 @@ TARGETS = (
      "movie": "오디세이", "titles": {"오디세이", "theodyssey", "odyssey"},
      "state_key": "2026-09-23"},
     {"date": "2026-09-23", "site_no": "0074", "theater": "CGV 왕십리",
-     "movie": "어벤져스: 엔드게임", "titles": {"어벤져스엔드게임", "avengersendgame"},
+     "movie": "어벤져스: 엔드게임", "titles": {"어벤져스엔드게임", "어벤져스엔드게임앙코르", "avengersendgame"},
      "state_key": "0074|avengers-endgame|2026-09-23"},
 )
 API = "https://cgv.co.kr/api/v1/booking/searchMovScnInfo"

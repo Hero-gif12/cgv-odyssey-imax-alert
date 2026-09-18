@@ -2,31 +2,60 @@
 
 **개인용 상영 스케줄 알림 도구이며 자동 예매 기능 없음**
 
-GitHub Actions에서 다음 두 대상을 감시하고, 새로 예매 가능한 IMAX 회차가 발견되면 Discord Webhook으로 알립니다.
+Cloudflare Workers Free에서 매분 실행하고, 새로 예매 가능한 IMAX 회차를 Discord Webhook으로 알립니다. 컴퓨터나 Codex를 켜 둘 필요가 없습니다.
 
-| 영화 | 극장 | 날짜 |
+| 영화 | 극장 | 상영 날짜 |
 | --- | --- | --- |
 | 오디세이 | CGV 용산아이파크몰 | 2026-09-23 |
 | 어벤져스: 엔드게임 | CGV 왕십리 | 2026-09-23 |
 
-용산 오디세이 **2026-09-21 감시는 종료**했습니다. 기존 `state.json`의 9월 21일 기록은 과거 알림 이력으로 남아 있지만 조회 대상이 아닙니다. 계정 로그인·쿠키·브라우저 자동화·자동 예매·좌석 선택은 사용하지 않습니다. Python 표준 라이브러리만 사용합니다.
+용산 오디세이 **2026-09-21 감시는 종료**했습니다. 과거 전송 이력은 보존하지만 해당 날짜를 조회하지 않습니다. 대상은 예매가 열리는 날짜가 아니라 실제 상영 날짜입니다.
 
-## 현재 동작
+## 현재 운영 방식
 
-- [Actions](https://github.com/Hero-gif12/cgv-odyssey-imax-alert/actions/workflows/cgv-monitor.yml)의 cron은 5분 간격으로 시작을 요청합니다. 시작된 각 실행에서 즉시 한 번, 이후 약 60초 간격으로 최대 5회 조회합니다. 예약 실행 자체는 지연되거나 누락될 수 있어 하루 내내 60초 간격을 보장하지는 않습니다.
-- 각 대상은 CGV 극장 코드, 지정 날짜, 영화 제목, 실제 상영관명 `IMAX` 또는 `아이맥스`, 잔여 좌석 1석 이상, 예매 제어 상태 `N`을 확인합니다. 영화 제목은 구분자를 제거한 뒤 정확하게 비교합니다. CGV에서 직접 예매 가능 여부를 최종 확인하세요.
-- 2026-09-17 단발 실조회에서 용산아이파크몰(`0013`) 9월 23일 10개 회차, 왕십리(`0074`) 9월 23일 16개 회차를 읽었습니다. 두 대상 영화의 IMAX 회차는 아직 없었습니다. 새 회차가 발견되면 다음 조회를 기다리지 않고 Discord로 전송합니다.
-- `state.json`은 대상별로 전송 완료 회차와 오류 대기 시각을 저장소에 커밋합니다. 새 왕십리 대상에는 별도 상태 키를 사용하며, 기존 오디세이 9월 23일 중복 방지 기록을 이어받습니다. Discord 전송에 실패한 회차는 전송 완료로 표시하지 않습니다.
-- 403·429·CAPTCHA·Challenge·응답 파싱 오류가 나면 현재 workflow의 추가 CGV 조회를 중단합니다. 첫 실패부터 5 → 15 → 30 → 60 → 120분 대기합니다. **첫 실패부터 Discord에 감시 중단을 알리고**, 같은 장애의 반복 알림은 6시간 동안 억제합니다. 오류 알림 전송에 실패하면 대기 중인 다음 실행에서 CGV에 추가 요청 없이 알림만 재시도합니다. 정상 회복 시 한 번 알립니다. 영화·IMAX 회차가 없는 정상 응답은 오류가 아닙니다.
-- 각 극장의 조회가 성공하면 즉시 새 회차를 알리고 상태를 저장합니다. 뒤에 조회하는 다른 극장의 실패 때문에 이미 발견한 새 회차의 알림이 미뤄지지 않습니다.
-- HTTP 403/429 발생 시 상태 코드·응답 유형·응답 크기·정해진 차단 표식만 로그에 남깁니다. 응답 원문·Webhook URL은 남기지 않습니다. CGV가 요청을 거부하는 동안에는 예매 오픈 알림을 보장할 수 없으며, 이 코드는 접근 제한을 해제하거나 우회하지 않습니다.
-- 같은 concurrency 그룹의 workflow는 동시에 실행되지 않습니다. 실행 시간이 길어지면 다음 조회를 생략하며, 한 작업의 제한 시간은 5분입니다.
+- 실행 코드: [`cloudflare/worker.mjs`](cloudflare/worker.mjs), 상태 저장: Cloudflare D1. JavaScript 표준 기능만 사용하며 외부 라이브러리가 없습니다.
+- Cron은 매분 실행을 요청합니다. 매 실행에서 두 극장을 순서대로 한 번씩 조회하고 새 회차는 발견 즉시 전송합니다. 실행 지연이나 CGV 차단이 있을 수 있어 정확한 60초 감지와 100% 전달을 보장하지는 않습니다.
+- 극장 코드·날짜·정확한 영화 제목·실제 IMAX 상영관·잔여 좌석 1석 이상·예매 제어 상태 `N`을 확인합니다. 왕십리의 실제 표기 `어벤져스-엔드게임 앙코르`도 인식합니다. 4DX/SCREENX/일반관은 제외합니다.
+- D1에 전송 완료 회차를 저장하고 180초 잠금으로 겹친 실행을 막습니다. 기존 GitHub `state.json`의 기록을 그대로 이전했습니다. Discord 전송 실패 시 완료로 표시하지 않으며 다음 실행에서 다시 시도합니다.
+- 403/429/CAPTCHA/Challenge/파싱 오류 시 그 실행의 추가 CGV 요청을 중단하고 5→15→30→60→120분 대기합니다. 첫 오류부터 Discord로 알리고 6시간 동안 반복 오류 알림을 억제합니다. 복구 시 한 번 알립니다. 정상적인 영화 없음·IMAX 회차 없음은 오류가 아닙니다.
+- 2026-09-24 00:00 KST부터 CGV 조회를 중단합니다. 다른 영화나 날짜는 `TARGETS`와 종료일을 함께 변경한 뒤 테스트해야 합니다.
+- 공개 상영정보만 조회합니다. 로그인·계정 쿠키·자동 예매·좌석 선택·결제·브라우저 위장·프록시·CAPTCHA 우회 기능이 없습니다.
 
-## 설정과 확인
+## 실조회 검증
 
-1. 저장소 **Settings → Secrets and variables → Actions → Secrets**에 `DISCORD_WEBHOOK_URL`을 등록합니다. URL을 코드·Issue·로그에 넣지 마세요. `.env`는 `.gitignore`에 등록돼 있습니다.
-2. **Actions → CGV IMAX monitor → Run workflow**에서 `once`를 실행해 두 극장·날짜의 실제 응답을 확인합니다. `test-discord`는 연결 테스트 메시지를 보냅니다. `test-alert`는 기존 진단 기능으로 오늘의 실제 오디세이 IMAX 회차가 있을 때만 `[테스트]` 메시지를 보냅니다.
-3. 예약 감시는 Actions 변수 `CGV_MONITOR_ENABLED=true`일 때 활성화됩니다. 중지하려면 `false`로 변경하거나 워크플로를 비활성화합니다.
+2026-09-18 17:06 KST, Cloudflare 운영 코드로 확인했습니다.
 
-로컬 단발 확인: `python3 monitor.py --once`  
-로컬 테스트: `python3 -m unittest discover -s tests -v`
+| 대상 | 실제 해당 극장 회차 수 | 알림 대상 IMAX 회차 |
+| --- | ---: | --- |
+| 용산 오디세이 9월 23일 | 31 | 07:30, 11:00, 14:30, 18:00, 21:30, 25:00 |
+| 왕십리 엔드게임 9월 23일 | 34 | 없음 (4DX/SCREENX만 확인) |
+
+이 표는 검증 시점의 결과입니다. CGV에서 직접 현재 예매 가능 여부를 확인하세요. 이전 GitHub 실행에서 이미 전송한 용산 6개 회차는 Cloudflare에서 다시 전송하지 않습니다.
+
+Discord 테스트는 서버의 메시지 생성 응답과 실제 채널 표시까지 확인했습니다. 휴대폰 알림 배너는 Discord 앱의 서버·채널 알림 설정과 기기 설정에 따릅니다.
+
+## 비밀값과 관리
+
+- `DISCORD_WEBHOOK_URL`은 Cloudflare Worker의 **Settings → Runtime variables and secrets → Secret**으로만 저장합니다. 실제 URL을 코드·Issue·로그·README에 쓰지 마세요.
+- `.env`, `.dev.vars`, `.wrangler/`는 Git에서 제외합니다. GitHub에 남아 있는 기존 Actions Secret은 Python 복구용이며 읽어 와서 코드에 복사하지 않습니다.
+- [Cloudflare 대시보드](https://dash.cloudflare.com/) → Workers & Pages → `cgv-personal-preflight` → **Observability**에서 KST 조회 로그를 확인합니다. 이 이름의 Worker가 현재 개인 감시 실행부입니다.
+- 중지: **Settings → Runtime variables and secrets → MONITOR_ENABLED**를 `false`로 저장합니다. 재개는 `true`입니다.
+- 회차 이력을 유지하려면 `DB` 바인딩의 `cgv-personal-monitor-state`를 그대로 유지하세요. 재배포한다고 초기화하지 마세요.
+- 운영 설정·검증·복구 세부사항: [Cloudflare README](cloudflare/README.md).
+
+Cloudflare Free에서 무료 사용량 내로 운영합니다. 매분 실행은 하루 약 1,440회이며 유료 서비스나 유료 API를 사용하지 않습니다. 예약 실행 정책과 한도는 [Cloudflare 문서](https://developers.cloudflare.com/workers/configuration/cron-triggers/)와 [무료 사용량 안내](https://developers.cloudflare.com/workers/platform/pricing/)를 참고하세요.
+
+## GitHub Actions와 Python 복구용 코드
+
+GitHub의 CGV 정기 조회 cron은 제거했습니다. `cgv-monitor.yml`은 `CGV_LEGACY_MONITOR_ENABLED=true`를 별도로 등록해야 동작하는 수동 복구용입니다. 이전 `CGV_MONITOR_ENABLED` 변수는 더 이상 실행 조건에 쓰지 않습니다. Cloudflare와 GitHub 감시를 동시에 켜지 마세요.
+
+Python `--once`, `--test-discord`, `--test-alert`, `--run`, `--notify-existing`와 기존 전송 이력 파일을 보존했습니다. 실제 CGV 접근 검증 후에만 복구용 감시를 사용하세요.
+
+```sh
+python3 monitor.py --once
+python3 monitor.py --test-discord
+python3 -m unittest discover -s tests -v
+node --test --test-isolation=none cloudflare/worker.test.mjs
+```
+
+`Offline monitor tests` workflow는 공개 응답에서 만든 fixture와 모의 오류로 판별·중복 방지·오류 처리만 테스트합니다. 이 테스트는 CGV에 요청하거나 Discord 메시지를 보내지 않습니다.
