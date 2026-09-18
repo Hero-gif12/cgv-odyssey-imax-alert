@@ -1,4 +1,6 @@
+import io
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import patch
 
@@ -127,9 +129,11 @@ class MonitorTests(unittest.TestCase):
 
             try:
                 with patch.object(monitor, "STATE_PATH", path), patch.object(monitor, "fetch", fail), \
-                        patch.object(monitor, "now", lambda: NOW):
+                        patch.object(monitor, "now", lambda: NOW), patch.object(monitor, "send_discord") as send:
                     self.assertEqual(monitor.run(), 1)
+                    self.assertEqual(send.call_count, 1)
                     self.assertEqual(monitor.run(), 0)
+                    self.assertEqual(send.call_count, 1)
                     self.assertEqual(calls, ["0013"])
                     self.assertEqual(monitor.load_state()["next_retry"], "2026-09-17T12:05:00+09:00")
             finally:
@@ -153,6 +157,63 @@ class MonitorTests(unittest.TestCase):
                 self.assertIn("복구", send.call_args.args[0])
         finally:
             path.unlink(missing_ok=True)
+
+    def test_first_target_alert_survives_second_target_failure(self):
+        path = Path(__file__).resolve().parents[1] / "test-partial-state.json"
+        state = {"version": 1, "initialized": True, "seen": {}, "failures": 0}
+        current = NOW
+
+        def fetch(target):
+            if target is ENDGAME:
+                raise monitor.MonitorError("HTTP 403")
+            return result(target, [row("0013", "오디세이", "IMAX관", "1310")])
+
+        try:
+            path.write_text(monitor.json.dumps(state), encoding="utf-8")
+            with patch.object(monitor, "STATE_PATH", path), patch.object(monitor, "fetch", fetch), \
+                    patch.object(monitor, "now", lambda: current), patch.object(monitor, "send_discord") as send:
+                self.assertEqual(monitor.run(), 1)
+                self.assertEqual(send.call_count, 2)  # booking alert, then interruption alert
+                self.assertEqual(send.call_args_list[0].args[1]["fields"][4]["value"], "13:10")
+                self.assertEqual(len(monitor.load_state()["seen"][ODYSSEY["state_key"]]), 1)
+                current = monitor.datetime.fromisoformat(monitor.load_state()["next_retry"])
+                self.assertEqual(monitor.run(), 1)
+                self.assertEqual(send.call_count, 2)
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_error_notification_retry_during_backoff_does_not_fetch_cgv(self):
+        path = Path(__file__).resolve().parents[1] / "test-pending-error-state.json"
+        state = {"version": 1, "initialized": True, "seen": {}, "failures": 2,
+                 "unhealthy": True, "error_notified_at": None,
+                 "next_retry": monitor.iso(NOW + monitor.timedelta(minutes=15))}
+        try:
+            path.write_text(monitor.json.dumps(state), encoding="utf-8")
+            with patch.object(monitor, "STATE_PATH", path), patch.object(monitor, "now", lambda: NOW), \
+                    patch.object(monitor, "fetch") as fetch, patch.object(monitor, "send_discord") as send:
+                send.side_effect = monitor.MonitorError("Discord 전송 실패: HTTP 503")
+                self.assertEqual(monitor.run(), 0)
+                self.assertIsNone(monitor.load_state()["error_notified_at"])
+                send.side_effect = None
+                self.assertEqual(monitor.run(), 0)
+                self.assertEqual(monitor.run(), 0)
+                self.assertEqual(send.call_count, 2)
+                fetch.assert_not_called()
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_http_block_diagnostic_does_not_print_response_body(self):
+        response = monitor.urllib.error.HTTPError(monitor.API, 403, "Forbidden",
+            {"Content-Type": "text/html"}, io.BytesIO(b"<html>access denied private-response-must-not-log</html>"))
+        output = io.StringIO()
+        with patch.object(monitor.urllib.request, "urlopen", side_effect=response) as request, redirect_stderr(output):
+            with self.assertRaisesRegex(monitor.MonitorError, "HTTP 403"):
+                monitor.fetch(ODYSSEY)
+        request.assert_called_once()
+        self.assertIn("403", output.getvalue())
+        self.assertIn("access denied", output.getvalue())
+        self.assertNotIn("private-response-must-not-log", output.getvalue())
+        self.assertNotIn(monitor.API, output.getvalue())
 
     def test_alert_uses_real_lookup_and_test_label_without_state_change(self):
         sample_target = {**ODYSSEY, "date": "2026-09-17"}
