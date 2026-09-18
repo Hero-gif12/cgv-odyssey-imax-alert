@@ -43,6 +43,13 @@ class MonitorTests(unittest.TestCase):
         controlled["cntlYn"] = "Y"
         self.assertEqual(result(ENDGAME, [controlled])["sessions"], [])
 
+    def test_verified_endgame_encore_title_and_imax_only(self):
+        rows = [row("0074", "어벤져스-엔드게임 앙코르", "IMAX관", "1310"),
+                row("0074", "어벤져스-엔드게임 앙코르", "4DX관", "1610"),
+                row("0074", "어벤져스-엔드게임 앙코르", "SCREENX관", "1910"),
+                row("0074", "어벤져스-인피니티 워 앙코르", "IMAX관", "2210")]
+        self.assertEqual([s["time"] for s in result(ENDGAME, rows)["sessions"]], ["13:10"])
+
     def test_legacy_odyssey_state_survives_and_new_target_alerts_once(self):
         path = Path(__file__).resolve().parents[1] / "test-legacy-state.json"
         odyssey_row = row("0013", "오디세이", "IMAX관", "1310")
