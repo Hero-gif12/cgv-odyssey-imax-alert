@@ -1,9 +1,7 @@
 // Personal schedule notifications only. No booking, login, cookies, or bypass.
 export const TARGETS = [
-  {date: '2026-09-23', site_no: '0013', theater: 'CGV 용산아이파크몰', movie: '오디세이',
-   titles: ['오디세이', 'theodyssey', 'odyssey'], state_key: '2026-09-23'},
-  {date: '2026-09-23', site_no: '0074', theater: 'CGV 왕십리', movie: '어벤져스: 엔드게임',
-   titles: ['어벤져스엔드게임', '어벤져스엔드게임앙코르', 'avengersendgame'], state_key: '0074|avengers-endgame|2026-09-23'}
+  {date: '2026-09-25', site_no: '0074', theater: 'CGV 왕십리', movie: '어벤져스: 엔드게임 앙코르', format: 'SCREENX',
+   titles: ['어벤져스엔드게임앙코르'], state_key: '0074|avengers-endgame-encore|SCREENX|2026-09-25'}
 ];
 const API = 'https://cgv.co.kr/api/v1/booking/searchMovScnInfo';
 const PAGE = 'https://cgv.co.kr/cnm/movieBook/cinema';
@@ -30,7 +28,7 @@ export function parseSchedule(payload, target) {
     if (row.siteNo !== target.site_no) continue;
     count++; movies.add(movie);
     if (matches(movie, target)) screens.add(screen);
-    if (!matches(movie, target) || !(/IMAX/i.test(screen) || screen.includes('아이맥스'))) continue;
+    if (!matches(movie, target) || !/^(?:SCREEN\s*X|스크린\s*X|스크린\s*엑스)(?:관|\s|\(|$)/i.test(screen)) continue;
     const time = String(row.scnsrtTm || '');
     if (!/^\d{4}$/.test(time) || Number(time.slice(0,2)) > 29 || Number(time.slice(2)) > 59)
       throw new MonitorError('CGV 상영시간 형식 오류');
@@ -113,7 +111,7 @@ export async function sendDiscord(env, payload, request = fetch, includeReceipt 
 function embed(target, sessions, ms) {
   return {title: 'CGV 예매 오픈 감지', color: 0xE74C3C,
     fields: [{name: '영화', value: target.movie, inline: true}, {name: '극장', value: target.theater, inline: true},
-      {name: '상영관', value: 'IMAX', inline: true}, {name: '날짜', value: target.date, inline: true},
+      {name: '상영관', value: target.format, inline: true}, {name: '날짜', value: target.date, inline: true},
       {name: '새로 발견된 회차', value: [...new Set(sessions.map(s=>s.time))].sort().join('\n')}],
     description: 'CGV에서 직접 예매 가능 여부를 확인하세요.',
     footer: {text: `감지 시간(KST): ${kst(ms).slice(0,19).replace('T',' ')} KST`}};
@@ -142,7 +140,7 @@ export class D1Store {
 
 export async function poll(env, options = {}) {
   const clock = options.clock || Date.now, current = clock();
-  if (kst(current).slice(0,10) > '2026-09-23') return {status:'expired'};
+  if (TARGETS.every(target => kst(current).slice(0,10) > target.date)) return {status:'expired'};
   if (env.MONITOR_ENABLED !== 'true') return {status:'disabled'};
   const store = options.store || new D1Store(env.DB, clock);
   const lookup = options.lookup || fetchSchedule;
@@ -175,16 +173,16 @@ export async function poll(env, options = {}) {
         state.next_retry = kst(clock() + [5,15,30,60,120][Math.min(state.failures-1,4)]*MINUTE);
         state.unhealthy = true;
         state.last_error = error instanceof MonitorError ? error.message : 'CGV 처리 오류';
-        state.failed_target = `${target.movie} / ${target.theater} / IMAX / ${target.date}`;
+        state.failed_target = `${target.movie} / ${target.theater} / ${target.format} / ${target.date}`;
         await store.save(state); await notifyError();
         return {status:'error', error:state.last_error, next_retry:state.next_retry};
       }
-      state.last_results.push({movie:target.movie, theater:target.theater, date:target.date, rows:result.rows,
+      state.last_results.push({movie:target.movie, theater:target.theater, format:target.format, date:target.date, rows:result.rows,
         screens:result.screens, times:result.sessions.map(s=>s.time)});
       const seen = new Set(state.seen[target.state_key] || []);
       const fresh = result.sessions.filter(s=>!seen.has(s.key));
       if (state.initialized && fresh.length) {
-        log(`신규 IMAX 회차 발견: ${target.movie} / ${target.theater} / ${fresh.map(s=>s.time).join(', ')}`, clock());
+        log(`신규 ${target.format} 회차 발견: ${target.movie} / ${target.theater} / ${fresh.map(s=>s.time).join(', ')}`, clock());
         if (await notify({embeds:[embed(target,fresh,clock())]})) {
           for (const session of fresh) seen.add(session.key);
           state.seen[target.state_key] = [...seen].sort();
@@ -193,7 +191,7 @@ export async function poll(env, options = {}) {
       } else if (!state.initialized) {
         state.seen[target.state_key] = result.sessions.map(s=>s.key).sort();
       }
-      if (!result.sessions.length) log(`${target.movie} / ${target.theater} / ${target.date} IMAX 회차 없음`, clock());
+      if (!result.sessions.length) log(`${target.movie} / ${target.theater} / ${target.date} ${target.format} 회차 없음`, clock());
     }
     if (state.unhealthy && await notify({content:'CGV 감시가 정상 상태로 복구되었습니다.'})) state.unhealthy = false;
     state.initialized = true; state.failures = 0; state.next_retry = null;
@@ -203,6 +201,16 @@ export async function poll(env, options = {}) {
     log('CGV 정상 조회 완료', clock());
     return {status:'ok', checked_at:state.last_ok, results:state.last_results};
   } finally { await store.release(); }
+}
+
+export async function resetState(env, now = Date.now()) {
+  if (env.MONITOR_ENABLED === 'true') return false;
+  // A fresh registration reports already-open sessions once on the next poll.
+  const state = {version:1, initialized:true, seen:Object.fromEntries(TARGETS.map(t=>[t.state_key,[]])),
+    failures:0, next_retry:null, unhealthy:false, registered_at:kst(now)};
+  const result = await env.DB.prepare('UPDATE monitor_state SET body=?, owner=NULL, lease_until=0 WHERE id=1 AND lease_until<=?')
+    .bind(JSON.stringify(state),now).run();
+  return result.meta.changes === 1;
 }
 
 async function authorized(request, env) {
@@ -223,16 +231,14 @@ export default {
     if (!await authorized(request,env)) return new Response('Not found',{status:404});
     const route = new URL(request.url).pathname;
     try {
-      if (request.method === 'POST' && route === '/admin/import-state' && env.MONITOR_ENABLED !== 'true') {
-        const raw = await readLimited(request);
-        const state = JSON.parse(raw);
-        if (raw.length > 100000 || state.version !== 1 || typeof state.initialized !== 'boolean' ||
-            !state.seen || typeof state.seen !== 'object' || Array.isArray(state.seen) ||
-            !Object.values(state.seen).every(v=>Array.isArray(v)&&v.every(k=>typeof k==='string')))
-          return Response.json({error:'Invalid migration state'},{status:400});
-        await env.DB.prepare('CREATE TABLE IF NOT EXISTS monitor_state (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL CHECK(json_valid(body)), owner TEXT, lease_until INTEGER NOT NULL DEFAULT 0)').run();
-        const result = await env.DB.prepare('INSERT OR IGNORE INTO monitor_state (id,body,lease_until) VALUES (1,?,0)').bind(JSON.stringify(state)).run();
-        return Response.json({imported:result.meta.changes===1});
+      if (request.method === 'POST' && route === '/admin/reset-state') {
+        const reset = await resetState(env);
+        return Response.json({reset},{status:reset?200:409});
+      }
+      if (request.method === 'POST' && route === '/admin/registration-notice') {
+        const target = TARGETS[0];
+        const receipt = await sendDiscord(env,{content:`**CGV 예매 알림 등록 완료**\n영화: ${target.movie}\n극장: ${target.theater}\n상영관: ${target.format}\n상영 날짜: ${target.date}\n기존 알림 두 건을 취소하고 이 조건 한 건으로 변경했습니다.\n예매 가능한 신규 회차를 발견하면 별도로 알려드립니다.`},fetch,true);
+        return Response.json({ok:!!receipt,receipt:receipt||null},{status:receipt?200:502});
       }
       if (request.method === 'POST' && route === '/admin/test-discord') {
         const receipt = await sendDiscord(env,{content:'CGV 감시 프로그램 Discord 알림 테스트 성공'},fetch,true);
@@ -241,7 +247,8 @@ export default {
       if (request.method === 'POST' && route === '/admin/run') return Response.json(await poll(env));
       if (request.method === 'GET' && route === '/admin/status') {
         const row = await env.DB.prepare('SELECT body, lease_until FROM monitor_state WHERE id=1').first();
-        return Response.json(row ? {state:JSON.parse(row.body), lease_until:row.lease_until} : {state:null});
+        return Response.json({enabled:env.MONITOR_ENABLED==='true', targets:TARGETS,
+          state:row?JSON.parse(row.body):null, lease_until:row?.lease_until||0});
       }
       return new Response('Not found',{status:404});
     } catch { return Response.json({error:'Worker execution or storage failed'},{status:503}); }

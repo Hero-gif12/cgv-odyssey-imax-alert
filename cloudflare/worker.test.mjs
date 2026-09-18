@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
-import {TARGETS, MonitorError, D1Store, parseSchedule, fetchSchedule, sendDiscord, poll} from './worker.mjs';
+import {TARGETS, MonitorError, D1Store, parseSchedule, fetchSchedule, sendDiscord, poll, resetState} from './worker.mjs';
 
-const fixtures = JSON.parse(readFileSync(new URL('./parser-fixtures.json', import.meta.url)));
+// Synthetic data, not a claim that these showtimes are available at CGV.
+const row = {movNm:'어벤져스-엔드게임 앙코르',scnsNm:'SCREENX관 (리클라이너)',scnYmd:'20260925',
+  scnsrtTm:'1330',siteNo:'0074',frSeatCnt:'1',cntlYn:'N'};
 const start = Date.parse('2026-09-18T08:00:00Z');
 const initial = () => ({version:1, initialized:true, seen:{}, failures:0, next_retry:null, unhealthy:false});
 function setup(state=initial()) {
@@ -20,25 +22,26 @@ function setup(state=initial()) {
   return {db, env:{DB:db, MONITOR_ENABLED:'true'}, clock:()=>now,
     advance:ms=>{now+=ms;}, state:()=>JSON.parse(sql.prepare('SELECT body FROM monitor_state').get().body)};
 }
-const result = target => parseSchedule(fixtures[TARGETS.indexOf(target)].payload,target);
+const result = target => parseSchedule({statusCode:0,data:[row]},target);
 
-test('both real Cloudflare CGV responses match the existing Python parser exactly', () => {
-  fixtures.forEach((fixture,i) => {
-    const {target,...actual}=parseSchedule(fixture.payload,TARGETS[i]);
-    assert.deepEqual(actual,fixture.expected);
-  });
-  assert.equal(result(TARGETS[0]).sessions.length,6);
-  assert.equal(result(TARGETS[1]).sessions.length,0);
-  assert.ok(result(TARGETS[1]).screens.some(screen=>screen.includes('4DX')));
+test('the only registered target is Wangsimni SCREENX Encore on September 25', () => {
+  assert.equal(TARGETS.length,1);
+  assert.equal(TARGETS[0].site_no,'0074');
+  assert.equal(TARGETS[0].date,'2026-09-25');
+  assert.equal(TARGETS[0].format,'SCREENX');
+  assert.match(TARGETS[0].state_key,/SCREENX\|2026-09-25$/);
+  assert.equal(result(TARGETS[0]).sessions.length,1);
 });
 
-test('Endgame encore is matched exactly; wrong movie, date, site and general halls are excluded', () => {
-  const row={movNm:'어벤져스-엔드게임 앙코르',scnsNm:'IMAX관',scnYmd:'20260923',scnsrtTm:'1330',siteNo:'0074',frSeatCnt:'1',cntlYn:'N'};
-  const parse=r=>parseSchedule({statusCode:0,data:[r]},TARGETS[1]);
+test('Encore SCREENX is exact; wrong title, date, site, IMAX, 4DX and general halls are excluded', () => {
+  const parse=r=>parseSchedule({statusCode:0,data:[r]},TARGETS[0]);
   assert.equal(parse(row).sessions.length,1);
-  for (const change of [{movNm:'어벤져스: 인피니티 워'},{scnsNm:'2D관'},{scnsNm:'4DX관'},{siteNo:'0013'},{frSeatCnt:'0'},{cntlYn:'Y'}])
+  assert.equal(parse({...row,movNm:'어벤져스: 엔드게임 앙코르',scnsNm:'Screen X관'}).sessions.length,1);
+  for (const change of [{movNm:'어벤져스: 엔드게임'},{movNm:'어벤져스: 인피니티 워'},
+    {scnsNm:'IMAX관'},{scnsNm:'2D관'},{scnsNm:'4DX관'},{scnsNm:'4DX SCREEN관'},
+    {siteNo:'0013'},{frSeatCnt:'0'},{cntlYn:'Y'}])
     assert.equal(parse({...row,...change}).sessions.length,0);
-  assert.throws(()=>parse({...row,scnYmd:'20260921'}),MonitorError);
+  assert.throws(()=>parse({...row,scnYmd:'20260924'}),MonitorError);
   assert.throws(()=>parse({...row,frSeatCnt:'unknown'}),MonitorError);
 });
 
@@ -47,16 +50,17 @@ test('separate executions preserve history in SQLite and only notify newly added
   const notify=async p=>{messages.push(p);return true;};
   assert.equal((await poll(x.env,{clock:x.clock,lookup:result,notify})).status,'ok');
   assert.equal(messages.length,1);
-  assert.equal(x.state().seen[TARGETS[0].state_key].length,6);
+  assert.equal(x.state().seen[TARGETS[0].state_key].length,1);
+  assert.equal(messages[0].embeds[0].fields.find(f=>f.name==='상영관').value,'SCREENX');
   x.advance(59800);
   await poll(x.env,{clock:x.clock,lookup:result,notify});
   assert.equal(messages.length,1);
   x.advance(60000);
   await poll(x.env,{clock:x.clock,notify,lookup:async target=>{
-    const r=result(target); if(target===TARGETS[0]) r.sessions.push({key:'new-show',time:'13:10',movie:target.movie,screen:'IMAX'}); return r;
+    const r=result(target); r.sessions.push({key:'new-show',time:'16:10',movie:target.movie,screen:'SCREENX관'}); return r;
   }});
   assert.equal(messages.length,2);
-  assert.equal(messages[1].embeds[0].fields.find(f=>f.name==='새로 발견된 회차').value,'13:10');
+  assert.equal(messages[1].embeds[0].fields.find(f=>f.name==='새로 발견된 회차').value,'16:10');
 });
 
 test('SQLite lease prevents overlapping invocations and rejects writes after expiry', async () => {
@@ -96,35 +100,43 @@ for(const error of ['HTTP 403','HTTP 429','CAPTCHA 또는 Challenge 의심','응
   });
 }
 
-test('Discord failure does not stop second target; undelivered shows retry on next execution', async () => {
+test('Discord failure keeps monitoring healthy; undelivered shows retry on next execution', async () => {
   const x=setup(); let queries=0,attempts=0;
   const lookup=t=>{queries++;return result(t);};
   await poll(x.env,{clock:x.clock,lookup,notify:async()=>{attempts++;return false;}});
-  assert.equal(queries,2); assert.equal(attempts,1);
+  assert.equal(queries,1); assert.equal(attempts,1);
+  assert.equal(x.state().failures,0);
   assert.equal(x.state().seen[TARGETS[0].state_key],undefined);
   x.advance(60000);
   await poll(x.env,{clock:x.clock,lookup,notify:async()=>true});
-  assert.equal(x.state().seen[TARGETS[0].state_key].length,6);
+  assert.equal(x.state().seen[TARGETS[0].state_key].length,1);
 });
 
-test('first target notification is saved even when second target fails', async () => {
-  const x=setup(), messages=[];
-  await poll(x.env,{clock:x.clock,notify:async p=>{messages.push(p);return true;},lookup:t=>{
-    if(t===TARGETS[1]) throw new MonitorError('HTTP 403'); return result(t);
-  }});
-  assert.equal(messages.length,2);
-  assert.equal(x.state().seen[TARGETS[0].state_key].length,6);
+test('reset deletes every previous target and error record, but requires disabled and unlocked state', async () => {
+  const x=setup({...initial(),seen:{'cancelled-target':['old-session']},last_results:[{movie:'cancelled'}],last_error:'old-error'});
+  assert.equal(await resetState(x.env,start),false);
+  const lock=new D1Store(x.db,x.clock); await lock.acquire();
+  x.env.MONITOR_ENABLED='false';
+  assert.equal(await resetState(x.env,start),false);
+  await lock.release();
+  assert.equal(await resetState(x.env,start),true);
+  assert.deepEqual(x.state().seen,{[TARGETS[0].state_key]:[]});
+  assert.equal(x.state().last_results,undefined);
+  assert.equal(x.state().last_error,undefined);
+  assert.equal(x.state().initialized,true);
 });
 
 test('first baseline is silent, empty valid data remains healthy, expired targets never query', async () => {
   const state=initial(); state.initialized=false;
   const x=setup(state); let notices=0;
   await poll(x.env,{clock:x.clock,lookup:result,notify:async()=>{notices++;return true;}});
-  assert.equal(notices,0); assert.equal(x.state().seen[TARGETS[0].state_key].length,6);
+  assert.equal(notices,0); assert.equal(x.state().seen[TARGETS[0].state_key].length,1);
   x.advance(60000);
   await poll(x.env,{clock:x.clock,lookup:t=>({...result(t),sessions:[]}),notify:async()=>true});
   assert.equal(x.state().failures,0);
-  x.advance(7*86400000);
+  x.advance(Date.parse('2026-09-25T14:59:00Z')-x.clock());
+  assert.equal((await poll(x.env,{clock:x.clock,lookup:t=>({...result(t),sessions:[]})})).status,'ok');
+  x.advance(60000);
   assert.equal((await poll(x.env,{clock:x.clock,lookup:()=>{throw Error('must not query');}})).status,'expired');
 });
 
