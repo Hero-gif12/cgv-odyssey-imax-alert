@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/wrangler.json",
+  "name": "cgv-personal-preflight",
+  "main": "worker.mjs",
+  "compatibility_date": "2026-09-18",
+  "workers_dev": true,
+  "vars": { "MONITOR_ENABLED": "false" },
+  "d1_databases": [{
+    "binding": "DB",
+    "database_name": "cgv-personal-monitor-state",
+    "database_id": "3dd912a9-9518-46f4-bb6b-ec40d59653f7"
+  }],
+  "observability": { "enabled": true },
+  "triggers": { "crons": [] }
+}
