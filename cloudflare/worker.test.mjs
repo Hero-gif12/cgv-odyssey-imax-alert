@@ -145,3 +145,13 @@ test('Discord safe handling never logs the webhook or thrown network detail', as
     assert.equal(lines.join('\n').includes(secret),false);
   } finally { console.log=original; }
 });
+
+test('Discord receipt contains only message and destination fields, never webhook token', async () => {
+  let calls=0;
+  const receipt=await sendDiscord({DISCORD_WEBHOOK_URL:'https://discord.com/api/webhooks/123/test_only_not_a_real_token'},
+    {content:'test'},async()=>Response.json(++calls===1?
+      {id:'1',channel_id:'2',content:'test',timestamp:'2026-09-18T08:00:00Z'}:
+      {guild_id:'3',name:'personal',token:'must-never-be-returned',url:'must-never-be-returned'}),true);
+  assert.equal(receipt.message_id,'1'); assert.equal(receipt.channel_id,'2'); assert.equal(receipt.guild_id,'3');
+  assert.equal(JSON.stringify(receipt).includes('must-never-be-returned'),false);
+});

@@ -17,7 +17,7 @@
 
 `DISCORD_WEBHOOK_URL`은 Cloudflare Worker **Secret**에만 넣습니다. GitHub Actions Secret은 Cloudflare로 자동 복사되지 않습니다. `.dev.vars`, `.env`는 Git에서 제외됩니다. 요청 원문, 인증 헤더, Webhook URL은 로그로 출력하지 않습니다.
 
-초기 설정 파일은 `MONITOR_ENABLED=false`, Cron 없음으로 되어 있습니다. 실제 CGV 응답과 Discord 연결 확인, 기존 `state.json` 이전 후에만 활성화합니다. 전환할 때 GitHub Actions의 `CGV_MONITOR_ENABLED`를 `false`로 바꿔 두 환경이 동시에 조회하지 않도록 합니다.
+이 계정에서는 실제 CGV 응답과 Discord 연결 확인, 기존 `state.json` 이전 후 `MONITOR_ENABLED=true`와 매분 Cron을 등록했습니다. 새 환경에 구축할 때는 두 설정을 끄고 같은 검증 및 상태 초기화를 먼저 진행하세요. GitHub Actions의 예약 실행은 제거했습니다. 기존 Python workflow는 `CGV_LEGACY_MONITOR_ENABLED=true`를 별도로 등록해야 실행되는 수동 복구용입니다. 두 환경을 동시에 켜지 마세요.
 
 이전용 관리자 경로는 인증 Secret이 필요하며 2026-09-18 19:00 KST에 자동 만료됩니다. 일반 공개 HTTP 요청은 404입니다. 이전 완료 후 예약 실행에는 관리자 경로가 필요하지 않습니다.
 

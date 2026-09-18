@@ -85,7 +85,7 @@ export async function fetchSchedule(target, request = fetch) {
   return parseSchedule(payload, target);
 }
 
-export async function sendDiscord(env, payload, request = fetch) {
+export async function sendDiscord(env, payload, request = fetch, includeReceipt = false) {
   try {
     const url = new URL(env.DISCORD_WEBHOOK_URL || '');
     if (url.protocol !== 'https:' || !['discord.com','discordapp.com'].includes(url.hostname) ||
@@ -96,8 +96,16 @@ export async function sendDiscord(env, payload, request = fetch) {
     const response = await request(url.toString(), {method: 'POST', redirect: 'manual',
       signal: AbortSignal.timeout(15000), headers: {'Content-Type': 'application/json', 'User-Agent': UA},
       body: JSON.stringify({allowed_mentions: {parse: []}, ...payload})});
+    if (![200,204].includes(response.status)) { await response.body?.cancel(); log(`Discord 전송 실패: HTTP ${response.status}`); return false; }
+    if (includeReceipt && response.status === 200) {
+      const message = JSON.parse(await readLimited(response));
+      const targetResponse = await request(url.origin + url.pathname, {redirect:'manual', signal:AbortSignal.timeout(10000)});
+      const target = targetResponse.ok ? JSON.parse(await readLimited(targetResponse)) : {};
+      if (!targetResponse.ok) await targetResponse.body?.cancel();
+      return {message_id:message.id, channel_id:message.channel_id, guild_id:target.guild_id,
+        webhook_name:target.name, timestamp:message.timestamp, content:message.content};
+    }
     await response.body?.cancel();
-    if (![200,204].includes(response.status)) { log(`Discord 전송 실패: HTTP ${response.status}`); return false; }
     log('Discord 알림 전송 성공'); return true;
   } catch { log('Discord 전송 실패: 네트워크 또는 설정 오류'); return false; }
 }
@@ -227,8 +235,8 @@ export default {
         return Response.json({imported:result.meta.changes===1});
       }
       if (request.method === 'POST' && route === '/admin/test-discord') {
-        const ok = await sendDiscord(env,{content:'CGV 감시 프로그램 Discord 알림 테스트 성공'});
-        return Response.json({ok},{status:ok?200:502});
+        const receipt = await sendDiscord(env,{content:'CGV 감시 프로그램 Discord 알림 테스트 성공'},fetch,true);
+        return Response.json({ok:!!receipt,receipt:receipt||null},{status:receipt?200:502});
       }
       if (request.method === 'POST' && route === '/admin/run') return Response.json(await poll(env));
       if (request.method === 'GET' && route === '/admin/status') {
