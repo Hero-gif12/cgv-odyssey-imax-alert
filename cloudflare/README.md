@@ -2,20 +2,24 @@
 
 **개인용 상영 스케줄 알림 도구이며 자동 예매 기능 없음**
 
-## 등록
+## 현재 상태: 감시 중지
+
+2026-09-22에 실제 Cloudflare Cron을 제거하고 `MONITOR_ENABLED=false`로 배포했습니다. 이 파일의 기존 조건은 코드 참고용이며 현재 CGV 요청이나 Discord 예매 알림이 실행되지 않습니다. `wrangler.jsonc`도 중지 상태로 맞췄습니다.
+
+## 보관된 이전 설정
 
 - 영화: 어벤져스: 엔드게임 앙코르 (CGV 실제 표기: 어벤져스-엔드게임 앙코르)
 - 극장: CGV 왕십리 (`0074`)
 - 관: SCREENX (예: SCREENX관 (리클라이너))
 - 날짜: 2026-09-25
-- Cron: `*/1 * * * *` (UTC 기준 매분, 로그는 KST)
+- Cron: 없음
 
 ## 구성
 
 - `worker.mjs`: 공개 CGV 요청, 정확한 조건 판별, Discord 알림, 오류 대기
 - `worker.test.mjs`: 합성 자료로 조건 필터·D1 중복 방지·잠금·오류 처리를 검사 (테스트 시각은 실제 예매 정보가 아님)
 - `schema.sql`: D1 상태 테이블
-- `wrangler.jsonc`: 배포 구성, D1 바인딩과 매분 Cron
+- `wrangler.jsonc`: 배포 구성, D1 바인딩과 중지 설정
 
 D1 바인딩은 `DB`, Secret은 `DISCORD_WEBHOOK_URL`, 감시 스위치는 `MONITOR_ENABLED`입니다. 암호화된 Secret은 코드에 넣지 않습니다. 무료 플랜을 유지하며 유료 상품을 사용하지 않습니다.
 
