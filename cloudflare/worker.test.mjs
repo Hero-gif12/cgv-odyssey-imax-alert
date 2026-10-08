@@ -2,13 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {DatabaseSync} from 'node:sqlite';
-import {TARGETS, MonitorError, D1Store, parseSchedule, fetchSchedule, sendDiscord, poll, resetState} from './worker.mjs';
+import {TARGETS, MonitorError, D1Store, parseSchedule, fetchSchedule, sendDiscord, poll as runPoll, resetState, parseMovies, parseDates, discoverTargets} from './worker.mjs';
 
 // Synthetic data, not a claim that these showtimes are available at CGV.
-const row = {movNm:'어벤져스-엔드게임 앙코르',scnsNm:'SCREENX관 (리클라이너)',scnYmd:'20260925',
+const row = {movNm:'어벤져스-둠스데이',scnsNm:'IMAX관',scnYmd:'20261216',
   scnsrtTm:'1330',siteNo:'0074',frSeatCnt:'1',cntlYn:'N'};
-const start = Date.parse('2026-09-18T08:00:00Z');
-const initial = () => ({version:1, initialized:true, seen:{}, failures:0, next_retry:null, unhealthy:false});
+const start = Date.parse('2026-10-08T00:00:00Z');
+const initial = () => ({version:1, initialized:true, seen:{}, failures:0, next_retry:null, unhealthy:false,registration:TARGETS[0].state_key});
 function setup(state=initial()) {
   const sql = new DatabaseSync(':memory:');
   sql.exec(readFileSync(new URL('./schema.sql',import.meta.url),'utf8'));
@@ -22,27 +22,31 @@ function setup(state=initial()) {
   return {db, env:{DB:db, MONITOR_ENABLED:'true'}, clock:()=>now,
     advance:ms=>{now+=ms;}, state:()=>JSON.parse(sql.prepare('SELECT body FROM monitor_state').get().body)};
 }
-const result = target => parseSchedule({statusCode:0,data:[row]},target);
+const dated = {...TARGETS[0],date:'2026-12-16'};
+const inventory = {count:1,matched:[{id:'123',title:'어벤져스: 둠스데이'}],dates:[dated.date]};
+const poll = (env,options={})=>runPoll(env,{discover:async()=>inventory,...options});
+const result = target => parseSchedule({statusCode:0,data:[{...row,scnYmd:target.date.replaceAll('-','')}]},target,start);
 
-test('the only registered target is Wangsimni SCREENX Encore on September 25', () => {
-  assert.equal(TARGETS.length,1);
-  assert.equal(TARGETS[0].site_no,'0074');
-  assert.equal(TARGETS[0].date,'2026-09-25');
-  assert.equal(TARGETS[0].format,'SCREENX');
-  assert.match(TARGETS[0].state_key,/SCREENX\|2026-09-25$/);
-  assert.equal(result(TARGETS[0]).sessions.length,1);
+test('the only target is Doomsday Wangsimni IMAX without a fixed release or screening date', () => {
+  assert.equal(TARGETS.length,1); assert.equal(TARGETS[0].site_no,'0074');
+  assert.equal(TARGETS[0].date,undefined); assert.equal(TARGETS[0].format,'IMAX');
+  assert.match(TARGETS[0].state_key,/doomsday.*all-dates$/);
+  assert.equal(result(dated).sessions.length,1);
 });
 
-test('Encore SCREENX is exact; wrong title, date, site, IMAX, 4DX and general halls are excluded', () => {
-  const parse=r=>parseSchedule({statusCode:0,data:[r]},TARGETS[0]);
+test('exact title, site, IMAX, bookability and date checks exclude other shows', () => {
+  const parse=r=>parseSchedule({statusCode:0,data:[r]},dated,start);
   assert.equal(parse(row).sessions.length,1);
-  assert.equal(parse({...row,movNm:'어벤져스: 엔드게임 앙코르',scnsNm:'Screen X관'}).sessions.length,1);
-  for (const change of [{movNm:'어벤져스: 엔드게임'},{movNm:'어벤져스: 인피니티 워'},
-    {scnsNm:'IMAX관'},{scnsNm:'2D관'},{scnsNm:'4DX관'},{scnsNm:'4DX SCREEN관'},
-    {siteNo:'0013'},{frSeatCnt:'0'},{cntlYn:'Y'}])
+  assert.equal(parse({...row,movNm:'어벤져스: 둠스데이',scnsNm:'IMAX관 (Laser)'}).sessions.length,1);
+  assert.equal(parse({...row,movNm:'Avengers: Doomsday',scnsNm:'IMAX'}).sessions.length,1);
+  for(const change of [{movNm:'어벤져스: 엔드게임'},{movNm:'어벤져스: 둠스데이 특별 인터뷰'},
+    {scnsNm:'SCREENX관'},{scnsNm:'2D관'},{scnsNm:'4DX관'},{siteNo:'0013'},{frSeatCnt:'0'},{cntlYn:'Y'}])
     assert.equal(parse({...row,...change}).sessions.length,0);
-  assert.throws(()=>parse({...row,scnYmd:'20260924'}),MonitorError);
+  assert.throws(()=>parse({...row,scnYmd:'20261217'}),MonitorError);
   assert.throws(()=>parse({...row,frSeatCnt:'unknown'}),MonitorError);
+  const past=Date.parse('2026-12-16T14:00:00+09:00');
+  assert.equal(parseSchedule({statusCode:0,data:[row]},dated,past).sessions.length,0);
+  assert.equal(parseSchedule({statusCode:0,data:[{...row,scnsrtTm:'2500'}]},dated,past).sessions.length,1);
 });
 
 test('separate executions preserve history in SQLite and only notify newly added shows', async () => {
@@ -51,13 +55,13 @@ test('separate executions preserve history in SQLite and only notify newly added
   assert.equal((await poll(x.env,{clock:x.clock,lookup:result,notify})).status,'ok');
   assert.equal(messages.length,1);
   assert.equal(x.state().seen[TARGETS[0].state_key].length,1);
-  assert.equal(messages[0].embeds[0].fields.find(f=>f.name==='상영관').value,'SCREENX');
+  assert.equal(messages[0].embeds[0].fields.find(f=>f.name==='상영관').value,'IMAX');
   x.advance(59800);
   await poll(x.env,{clock:x.clock,lookup:result,notify});
   assert.equal(messages.length,1);
   x.advance(60000);
   await poll(x.env,{clock:x.clock,notify,lookup:async target=>{
-    const r=result(target); r.sessions.push({key:'new-show',time:'16:10',movie:target.movie,screen:'SCREENX관'}); return r;
+    const r=result(target); r.sessions.push({key:'new-show',time:'16:10',movie:target.movie,screen:'IMAX관'}); return r;
   }});
   assert.equal(messages.length,2);
   assert.equal(messages[1].embeds[0].fields.find(f=>f.name==='새로 발견된 회차').value,'16:10');
@@ -126,24 +130,21 @@ test('reset deletes every previous target and error record, but requires disable
   assert.equal(x.state().initialized,true);
 });
 
-test('first baseline is silent, empty valid data remains healthy, expired targets never query', async () => {
+test('same registration baseline is silent and an unlisted movie remains healthy beyond guessed release date', async () => {
   const state=initial(); state.initialized=false;
   const x=setup(state); let notices=0;
   await poll(x.env,{clock:x.clock,lookup:result,notify:async()=>{notices++;return true;}});
   assert.equal(notices,0); assert.equal(x.state().seen[TARGETS[0].state_key].length,1);
-  x.advance(60000);
-  await poll(x.env,{clock:x.clock,lookup:t=>({...result(t),sessions:[]}),notify:async()=>true});
-  assert.equal(x.state().failures,0);
-  x.advance(Date.parse('2026-09-25T14:59:00Z')-x.clock());
-  assert.equal((await poll(x.env,{clock:x.clock,lookup:t=>({...result(t),sessions:[]})})).status,'ok');
-  x.advance(60000);
-  assert.equal((await poll(x.env,{clock:x.clock,lookup:()=>{throw Error('must not query');}})).status,'expired');
+  x.advance(Date.parse('2027-01-20T00:00:00Z')-x.clock());
+  const absent=async()=>({count:50,matched:[],dates:[]});
+  const outcome=await poll(x.env,{clock:x.clock,discover:absent,lookup:()=>{throw Error('must not query');}});
+  assert.equal(outcome.status,'ok'); assert.equal(x.state().failures,0);
 });
 
 test('HTTP transport detects 403, 429, challenge and malformed JSON without retry', async () => {
   for(const [status,body,type] of [[403,'blocked','text/html'],[429,'slow down','text/plain'],[200,'cloudflare challenge','text/html'],[200,'{','application/json']]) {
     let requests=0;
-    await assert.rejects(fetchSchedule(TARGETS[0],async()=>{requests++;return new Response(body,{status,headers:{'content-type':type}});}),MonitorError);
+    await assert.rejects(fetchSchedule(dated,async()=>{requests++;return new Response(body,{status,headers:{'content-type':type}});}),MonitorError);
     assert.equal(requests,1);
   }
 });
@@ -162,8 +163,64 @@ test('Discord receipt contains only message and destination fields, never webhoo
   let calls=0;
   const receipt=await sendDiscord({DISCORD_WEBHOOK_URL:'https://discord.com/api/webhooks/123/test_only_not_a_real_token'},
     {content:'test'},async()=>Response.json(++calls===1?
-      {id:'1',channel_id:'2',content:'test',timestamp:'2026-09-18T08:00:00Z'}:
+      {id:'1',channel_id:'2',content:'test',timestamp:'2026-10-08T00:00:00Z'}:
       {guild_id:'3',name:'personal',token:'must-never-be-returned',url:'must-never-be-returned'}),true);
   assert.equal(receipt.message_id,'1'); assert.equal(receipt.channel_id,'2'); assert.equal(receipt.guild_id,'3');
   assert.equal(JSON.stringify(receipt).includes('must-never-be-returned'),false);
+});
+
+
+test('catalog search validates structure; absent movie makes only one HTTP request', async () => {
+  assert.deepEqual(parseMovies({statusCode:0,data:[{movNm:'어벤져스-엔드게임 앙코르',movNo:'12'}]},TARGETS[0]).matched,[]);
+  assert.equal(parseMovies({statusCode:0,data:[{movNm:'Avengers: Doomsday',movNo:'13'}]},TARGETS[0]).matched.length,1);
+  assert.throws(()=>parseMovies({statusCode:0,data:[{movNo:'12'}]},TARGETS[0]),MonitorError);
+  let calls=0;
+  const absent=await discoverTargets(TARGETS[0],async url=>{
+    calls++; assert.match(url,/searchAtktTopPostrList/);
+    assert.equal(new URL(url).searchParams.get('movNm'),'');
+    return Response.json({statusCode:0,data:[]});
+  },start);
+  assert.equal(calls,1); assert.deepEqual(absent.dates,[]);
+});
+
+test('public date list drives checks, including dates outside December 16', async () => {
+  assert.deepEqual(parseDates({statusCode:0,data:[{scnYmd:'20261225'},{scnYmd:'20261215'},{scnYmd:'20261225'}]},start),['2026-12-15','2026-12-25']);
+  assert.throws(()=>parseDates({statusCode:0,data:[{scnYmd:'20260230'}]},start),MonitorError);
+  const x=setup(),messages=[],dates=['2026-12-15','2026-12-25'];
+  const options={clock:x.clock,discover:async()=>({...inventory,dates}),lookup:result,notify:async p=>{messages.push(p);return true;}};
+  await poll(x.env,options); assert.equal(messages.length,2);
+  assert.deepEqual(messages.map(p=>p.embeds[0].fields.find(f=>f.name==='날짜').value),dates);
+  x.advance(60000); await poll(x.env,options); assert.equal(messages.length,2);
+  assert.equal(x.state().seen[TARGETS[0].state_key].length,2);
+});
+
+test('blocked discovery stops before any schedule request and persists backoff', async () => {
+  const x=setup(); let calls=0;
+  const options={clock:x.clock,discover:async()=>{calls++;throw new MonitorError('HTTP 403');},
+    lookup:()=>{throw Error('must not query');},notify:async()=>true};
+  assert.equal((await poll(x.env,options)).status,'error');
+  x.advance(60000); assert.equal((await poll(x.env,options)).status,'backoff'); assert.equal(calls,1);
+});
+
+test('an error on the first date prevents all later date requests', async () => {
+  const x=setup(); let calls=0;
+  const out=await poll(x.env,{clock:x.clock,discover:async()=>({...inventory,dates:['2026-12-15','2026-12-16']}),
+    lookup:async()=>{calls++;throw new MonitorError('HTTP 429');},notify:async()=>true});
+  assert.equal(out.status,'error'); assert.equal(calls,1);
+});
+
+test('many public dates continue next invocation without dropping or duplicating any date', async () => {
+  const x=setup(),dates=Array.from({length:12},(_,i)=>`2026-12-${String(i+1).padStart(2,'0')}`),checked=[];
+  const options={clock:x.clock,discover:async()=>({...inventory,dates}),lookup:t=>{checked.push(t.date);return result(t);},notify:async()=>true};
+  assert.equal((await poll(x.env,options)).pending_dates,true); assert.equal(checked.length,10);
+  x.advance(60000); assert.equal((await poll(x.env,options)).pending_dates,false);
+  assert.deepEqual(checked,dates); assert.equal(x.state().date_cursor,0);
+});
+
+test('new registration clears old backoff, preserves old history, and immediately reports already-open shows once', async () => {
+  const x=setup({...initial(),registration:'previous-monitor',seen:{old:['old-show']},unhealthy:true,next_retry:'2030-01-01T00:00:00Z'});
+  const messages=[]; const options={clock:x.clock,lookup:result,notify:async p=>{messages.push(p);return true;}};
+  await poll(x.env,options); assert.equal(messages.length,1); assert.deepEqual(x.state().seen.old,['old-show']);
+  x.advance(60000); await poll(x.env,options); assert.equal(messages.length,1);
+  assert.equal(x.state().registration,TARGETS[0].state_key);
 });
