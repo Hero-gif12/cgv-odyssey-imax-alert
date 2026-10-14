@@ -27,9 +27,9 @@ const inventory = {count:1,matched:[{id:'123',title:'어벤져스: 둠스데이'
 const poll = (env,options={})=>runPoll(env,{discover:async()=>inventory,...options});
 const result = target => parseSchedule({statusCode:0,data:[{...row,scnYmd:target.date.replaceAll('-','')}]},target,start);
 
-test('the only target is Doomsday Wangsimni IMAX without a fixed release or screening date', () => {
+test('the only target is Doomsday Wangsimni IMAX with December 16 screening start and immediate monitoring', () => {
   assert.equal(TARGETS.length,1); assert.equal(TARGETS[0].site_no,'0074');
-  assert.equal(TARGETS[0].date,undefined); assert.equal(TARGETS[0].format,'IMAX');
+  assert.equal(TARGETS[0].screening_from,'2026-12-16'); assert.equal(TARGETS[0].date,undefined); assert.equal(TARGETS[0].format,'IMAX');
   assert.match(TARGETS[0].state_key,/doomsday.*all-dates$/);
   assert.equal(result(dated).sessions.length,1);
 });
@@ -183,13 +183,13 @@ test('catalog search validates structure; absent movie makes only one HTTP reque
   assert.equal(calls,1); assert.deepEqual(absent.dates,[]);
 });
 
-test('public date list drives checks, including dates outside December 16', async () => {
+test('public date list drives checks, filters pre-release screenings but monitors December 16 and later now', async () => {
   assert.deepEqual(parseDates({statusCode:0,data:[{scnYmd:'20261225'},{scnYmd:'20261215'},{scnYmd:'20261225'}]},start),['2026-12-15','2026-12-25']);
   assert.throws(()=>parseDates({statusCode:0,data:[{scnYmd:'20260230'}]},start),MonitorError);
-  const x=setup(),messages=[],dates=['2026-12-15','2026-12-25'];
+  const x=setup(),messages=[],dates=['2026-12-15','2026-12-16','2026-12-25'];
   const options={clock:x.clock,discover:async()=>({...inventory,dates}),lookup:result,notify:async p=>{messages.push(p);return true;}};
   await poll(x.env,options); assert.equal(messages.length,2);
-  assert.deepEqual(messages.map(p=>p.embeds[0].fields.find(f=>f.name==='날짜').value),dates);
+  assert.deepEqual(messages.map(p=>p.embeds[0].fields.find(f=>f.name==='날짜').value),dates.slice(1));
   x.advance(60000); await poll(x.env,options); assert.equal(messages.length,2);
   assert.equal(x.state().seen[TARGETS[0].state_key].length,2);
 });
@@ -210,7 +210,7 @@ test('an error on the first date prevents all later date requests', async () => 
 });
 
 test('many public dates continue next invocation without dropping or duplicating any date', async () => {
-  const x=setup(),dates=Array.from({length:12},(_,i)=>`2026-12-${String(i+1).padStart(2,'0')}`),checked=[];
+  const x=setup(),dates=Array.from({length:12},(_,i)=>`2026-12-${String(i+16).padStart(2,'0')}`),checked=[];
   const options={clock:x.clock,discover:async()=>({...inventory,dates}),lookup:t=>{checked.push(t.date);return result(t);},notify:async()=>true};
   assert.equal((await poll(x.env,options)).pending_dates,true); assert.equal(checked.length,10);
   x.advance(60000); assert.equal((await poll(x.env,options)).pending_dates,false);
