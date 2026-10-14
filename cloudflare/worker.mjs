@@ -1,6 +1,7 @@
 // Personal schedule notifications only. No booking, login, cookies, or bypass.
 export const TARGETS = [
   {site_no: '0074', theater: 'CGV 왕십리', movie: '어벤져스: 둠스데이', format: 'IMAX',
+   screening_from: '2026-12-16',
    titles: ['어벤져스둠스데이', 'avengersdoomsday'], state_key: '0074|avengers-doomsday|IMAX|all-dates'}
 ];
 const API = 'https://cgv.co.kr/api/v1/booking/';
@@ -222,13 +223,15 @@ export async function poll(env, options = {}) {
     state.next_poll_at = current + 55000;
     state.last_check = kst(current); state.last_results = []; state.discovery = [];
     await store.save(state);
-    log('CGV 조회 시작', current);
+    log(`CGV 조회 시작: 상영일 ${TARGETS[0].screening_from || '전체'} 이후 / 예매 오픈은 지금부터 감시`, current);
     let pending = false;
     for (const base of TARGETS) {
       let inventory;
       try { inventory = await discover(base); } catch (error) { return await failed(error,base); }
+      // Filter screening dates, never the date on which booking opens.
+      inventory = {...inventory, dates:inventory.dates.filter(date=>!base.screening_from || date>=base.screening_from)};
       state.discovery.push({movie:base.movie,theater:base.theater,format:base.format,
-        catalog_count:inventory.count,matched:inventory.matched,dates:inventory.dates});
+        screening_from:base.screening_from || null,catalog_count:inventory.count,matched:inventory.matched,dates:inventory.dates});
       if (!inventory.matched.length) log(`${base.movie}: CGV 예매 영화 목록에 아직 없음`,clock());
       else if (!inventory.dates.length) log(`${base.theater}: 공개 상영 날짜 없음`,clock());
       const fingerprint = inventory.dates.join(',');
